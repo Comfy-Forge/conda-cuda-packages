@@ -305,6 +305,10 @@ def main() -> int:
                     "build_string": build_string(cfg, cuda, torch_version, python,
                                                  args.build_number),
                     "family": bool(family),
+                    # A family package has one tarball per version, so the
+                    # cell names the one it needs; everything else has one.
+                    "src_tarball": (f"{cfg['name']}-{cell_version}-source.tar.gz"
+                                    if family else f"{cfg['name']}-source.tar.gz"),
                 })
         if holes["no_pairing"]:
             pairs = sorted({t for t, _, _ in holes["no_pairing"]})

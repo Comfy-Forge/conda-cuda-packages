@@ -45,10 +45,31 @@ def load_packages(only: str) -> list[tuple[str, dict]]:
     return out
 
 
-def fetch_one(cfg: dict, outdir: Path) -> Path:
+def revs_for(cfg: dict) -> list[tuple[str, str]]:
+    """[(version, rev)] this package can be built from.
+
+    A FAMILY package (torchvision, torchaudio) has one revision per torch
+    pairing, so the source job must produce a tarball for each: torchvision
+    0.26.0 and 0.28.0 are different code, and a single tarball would silently
+    build one version's source under another version's label.
+    """
+    fv = cfg.get("family_versions") or {}
+    if fv:
+        seen, out = set(), []
+        for entry in fv.values():
+            key = (entry["version"], entry["source_rev"])
+            if key not in seen:
+                seen.add(key)
+                out.append(key)
+        return sorted(out)
+    return [(str(cfg.get("version") or ""),
+             cfg.get("source_rev") or cfg.get("source_tag"))]
+
+
+def fetch_one(cfg: dict, outdir: Path, version: str = "", rev: str = "") -> Path:
     name = cfg["name"]
     repo = cfg["source_repo"]
-    rev = cfg.get("source_rev") or cfg.get("source_tag")
+    rev = rev or cfg.get("source_rev") or cfg.get("source_tag")
     if not rev:
         sys.exit(f"{name}: no source_rev — a floating ref makes the build "
                  f"unreproducible and the provenance record a lie")
@@ -59,7 +80,10 @@ def fetch_one(cfg: dict, outdir: Path) -> Path:
         print(f"{name}: WARNING source_rev {rev!r} is not a 40-hex commit; "
               f"resolving it now and pinning the result", file=sys.stderr)
 
-    work = outdir / name
+    # Per-version work dir and tarball, so a family package's revisions do not
+    # overwrite each other.
+    stem = f"{name}-{version}" if version else name
+    work = outdir / stem
     if work.exists():
         shutil.rmtree(work)
     work.parent.mkdir(parents=True, exist_ok=True)
@@ -86,10 +110,10 @@ def fetch_one(cfg: dict, outdir: Path) -> Path:
     # in makes the tarball non-deterministic.
     shutil.rmtree(work / ".git", ignore_errors=True)
 
-    tarball = outdir / f"{name}-source.tar.gz"
+    tarball = outdir / f"{stem}-source.tar.gz"
     with tarfile.open(tarball, "w:gz") as tf:
-        tf.add(work, arcname=name)
-    (outdir / f"{name}-source.rev").write_text(resolved + "\n")
+        tf.add(work, arcname=name)   # arcname stays the package name
+    (outdir / f"{stem}-source.rev").write_text(resolved + "\n")
     print(f"{name}: {resolved} -> {tarball} ({tarball.stat().st_size} bytes)")
     return tarball
 
@@ -101,7 +125,8 @@ def main() -> int:
     args = ap.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for _folder, cfg in load_packages(args.package):
-        fetch_one(cfg, args.output_dir)
+        for version, rev in revs_for(cfg):
+            fetch_one(cfg, args.output_dir, version=version, rev=rev)
     return 0
 
 

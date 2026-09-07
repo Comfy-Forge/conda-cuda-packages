@@ -114,7 +114,12 @@ jobs:
           CUW_MODE: shard
           CUW_SHARD_INDEX: ${{ matrix.cell.shard_index }}
           CUW_SHARD_COUNT: ${{ matrix.cell.shard_count }}
-          CUW_SRC_TARBALL: ${{ github.workspace }}/staging/${{ matrix.cell.package }}-source.tar.gz
+          CUW_SRC_TARBALL: ${{ github.workspace }}/staging/${{ matrix.cell.src_tarball }}
+          # Family packages (torchvision/torchaudio) version with the torch
+          # they build against, so the cell carries both and the recipe reads
+          # them; for everything else these equal the package.yml values.
+          CUW_VERSION: ${{ matrix.cell.version }}
+          CUW_SOURCE_REV: ${{ matrix.cell.source_rev }}
           # conda-torch's libtorch hard-depends on the __cuda virtual
           # package, and a GitHub runner has no GPU, so the solve fails with
           # "__cuda *, for which no candidates were found". Declaring the
@@ -193,7 +198,12 @@ jobs:
         env:
           CUW_MODE: ${{ matrix.cell.shard_count != '0' && 'link' || 'full' }}
           CUW_SHARD_COUNT: "0"
-          CUW_SRC_TARBALL: ${{ github.workspace }}/staging/${{ matrix.cell.package }}-source.tar.gz
+          CUW_SRC_TARBALL: ${{ github.workspace }}/staging/${{ matrix.cell.src_tarball }}
+          # Family packages (torchvision/torchaudio) version with the torch
+          # they build against, so the cell carries both and the recipe reads
+          # them; for everything else these equal the package.yml values.
+          CUW_VERSION: ${{ matrix.cell.version }}
+          CUW_SOURCE_REV: ${{ matrix.cell.source_rev }}
           # conda-torch's libtorch hard-depends on the __cuda virtual
           # package, and a GitHub runner has no GPU, so the solve fails with
           # "__cuda *, for which no candidates were found". Declaring the
