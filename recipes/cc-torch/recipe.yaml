@@ -258,6 +258,14 @@ requirements:
       then: patchelf
   host:
     - python ${{ python }}.*
+    # python_abi's run_export is what puts a real interpreter-ABI bound on the
+    # RUNTIME package. Without it a cp312 extension module declares only an
+    # unbounded `python` and may legally be installed into a py3.10 env. Today
+    # that is masked for torch-linked packages, because pytorch's own
+    # python_abi dep constrains the env transitively — but the mask vanishes
+    # for a links_torch: false package (cumm, spconv), which has no pytorch to
+    # inherit from. Declare it directly rather than depending on a sibling.
+    - python_abi ${{ python }}.* *_cp${{ py_nodot }}
     - pip
     - setuptools
     # The exact torch this compiles against. The build glob is what locks the

@@ -80,20 +80,29 @@ def jump(code: int, k: int, jt: int, jf: int) -> bytes:
 
 def build_filter(arch_token: int, nr_socket: int) -> bytes:
     """Deny socket(AF_INET|AF_INET6, ...) with EPERM; allow everything else."""
+    # Jump offsets are relative to the NEXT instruction, so they must be read
+    # against the final layout:
+    #   0 LD arch | 1 JEQ arch | 2 LD nr | 3 JEQ socket | 4 LD arg0
+    #   5 JEQ AF_INET | 6 JEQ AF_INET6 | 7 RET ALLOW | 8 RET EPERM | 9 RET KILL
+    # The arch mismatch branch MUST reach 9, not 7: a process whose syscall
+    # numbering we cannot map (a 32-bit child reports AUDIT_ARCH_I386, where
+    # the numbers mean entirely different calls) cannot be filtered correctly,
+    # so it is killed rather than run unprotected. An earlier version jumped
+    # to 7 — RET ALLOW — which silently gave exactly those processes
+    # unrestricted network, the textbook seccomp bypass.
     prog = b"".join([
-        # if arch != expected -> kill (refuse to run under an arch we cannot
-        # filter correctly, rather than silently allowing everything)
         stmt(BPF_LD | BPF_W | BPF_ABS, OFF_ARCH),
-        jump(BPF_JMP | BPF_JEQ | BPF_K, arch_token, 0, 5),
+        jump(BPF_JMP | BPF_JEQ | BPF_K, arch_token, 0, 7),   # mismatch -> 9 KILL
         # if nr != socket -> allow
         stmt(BPF_LD | BPF_W | BPF_ABS, OFF_NR),
-        jump(BPF_JMP | BPF_JEQ | BPF_K, nr_socket, 0, 3),
+        jump(BPF_JMP | BPF_JEQ | BPF_K, nr_socket, 0, 3),    # not socket -> 7 ALLOW
         # args[0] == AF_INET or AF_INET6 -> EPERM
         stmt(BPF_LD | BPF_W | BPF_ABS, OFF_ARG0),
-        jump(BPF_JMP | BPF_JEQ | BPF_K, AF_INET, 2, 0),
-        jump(BPF_JMP | BPF_JEQ | BPF_K, AF_INET6, 1, 0),
-        stmt(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
-        stmt(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EPERM),
+        jump(BPF_JMP | BPF_JEQ | BPF_K, AF_INET, 2, 0),      # -> 8 EPERM
+        jump(BPF_JMP | BPF_JEQ | BPF_K, AF_INET6, 1, 0),     # -> 8 EPERM
+        stmt(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),            # 7
+        stmt(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EPERM),    # 8
+        stmt(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),     # 9
     ])
     return prog
 

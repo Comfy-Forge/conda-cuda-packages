@@ -133,6 +133,20 @@ def verify(path: Path, ledger: set, expect_arch: str, tmp: Path) -> bool:
                   f"(got {torch_dep!r}) -- run_exports cannot express flavour, "
                   f"so without this a cu{m.group('cu')} build can pair with another flavour")
 
+    # ---- interpreter ABI ----------------------------------------------------
+    # A build string claiming py312 must carry a matching python_abi run dep.
+    # A bare `python` bound lets a cp312 extension module install into py3.10;
+    # for torch-linked packages pytorch's own python_abi masks that
+    # transitively, which is exactly why it must be asserted here rather than
+    # assumed -- the mask is absent for any package that does not link torch.
+    if m and m.group("py"):
+        pytag = m.group("py")                      # e.g. "312"
+        want = f"{pytag[0]}.{pytag[1:]}"           # "3.12"
+        abi = [d for d in depends if d.split(" ", 1)[0] == "python_abi"]
+        rep.check(bool(abi), f"declares a python_abi dependency (build says py{pytag})")
+        rep.check(any(d.split()[1].startswith(want) for d in abi if len(d.split()) >= 2),
+                  f"python_abi pins {want} to match the build string (got {abi!r})")
+
     # ---- no vendored torch --------------------------------------------------
     vendored_torch = [n for n in payload
                       if re.search(r"(^|/)(lib)?torch(_cpu|_cuda|_python)?\.(so|dll)", n)]
