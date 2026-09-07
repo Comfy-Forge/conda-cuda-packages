@@ -418,6 +418,12 @@ requirements:
     - libcusolver-dev
     - libcufft-dev
     - libcurand-dev
+    # torch 2.4/2.5 link libnvToolsExt, and importing torch is the FIRST thing
+    # a setup.py does -- so without this the build dies before it compiles
+    # anything: "OSError: libnvToolsExt.so.1: cannot open shared object file".
+    # Only the older lines need it (NVTX v3 is header-only), but asking for it
+    # everywhere costs a metapackage and keeps the floor in one place.
+    - cuda-nvtx
   run:
     - python
     # Every package here ships compiled CUDA kernels, so it states that about

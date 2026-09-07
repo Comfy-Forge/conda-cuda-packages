@@ -77,6 +77,16 @@ build_deps: []
 # setup.py finds them via CONDA_PREFIX/BUILD_PREFIX (its find_library() walks
 # those explicitly), so a conda host env is the supported discovery path.
 host_deps:
+  # torchvision <= 0.26.0 imports pkg_resources in setup.py; setuptools 82.0.0
+  # removed it, and CI resolved 84.0.0, so every cell whose pairing is older
+  # than 0.27.0 died with "ModuleNotFoundError: No module named
+  # 'pkg_resources'" -- torch 2.7 through 2.10 across four pythons, while
+  # 2.11+ passed. Bound checked against upstream: 0.22-0.26 reference it,
+  # 0.27.0 does not. <82 rather than <81 because 81.0.0 still ships it (it
+  # only warns), and it is the bound conda-forge's own torchvision recipe
+  # uses. Harmless for the newer pairings, which simply get an older
+  # setuptools they do not care about.
+  - setuptools <82
   - libjpeg-turbo
   - libpng
   - libwebp-base
