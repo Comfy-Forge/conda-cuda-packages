@@ -33,9 +33,30 @@ fi
 # torch's cpp_extension invokes "$CUDA_HOME/bin/nvcc" by absolute path, so a
 # PATH-based shim is simply never consulted. Move the real binary aside and
 # occupy its filename.
-if [ -f "$PREFIX/bin/nvcc" ] && [ ! -f "$PREFIX/bin/nvcc.real" ]; then
-  mv "$PREFIX/bin/nvcc" "$PREFIX/bin/nvcc.real"
-  install -m 0755 "$RECIPE_DIR/nvcc-wrap.sh" "$PREFIX/bin/nvcc"
+#
+# The guard below is not paranoia. Without it, a re-entered script (a reused
+# prefix, a retried step) moves the WRAPPER onto nvcc.real and installs a
+# fresh wrapper on top, so nvcc execs ccache on a script that execs ccache on
+# itself. That does not fail — it recurses forever, and in CI it burns the
+# whole job timeout with no error. Measured the hard way, step 0.
+if [ -f "$PREFIX/bin/nvcc" ]; then
+  if grep -q 'CUW_WRAPPER_MARKER' "$PREFIX/bin/nvcc" 2>/dev/null; then
+    # already ours: leave the seat alone, and make sure the real binary is
+    # still behind it rather than silently recursing.
+    if [ ! -x "$PREFIX/bin/nvcc.real" ] || grep -q 'CUW_WRAPPER_MARKER' "$PREFIX/bin/nvcc.real" 2>/dev/null; then
+      echo "::error::\$PREFIX/bin/nvcc is the cuw wrapper but nvcc.real is missing or is itself a wrapper -- the nvcc seat is corrupt and would recurse forever" >&2
+      exit 1
+    fi
+    echo "nvcc seat already wrapped; reusing"
+  elif [ ! -f "$PREFIX/bin/nvcc.real" ]; then
+    mv "$PREFIX/bin/nvcc" "$PREFIX/bin/nvcc.real"
+    install -m 0755 "$RECIPE_DIR/nvcc-wrap.sh" "$PREFIX/bin/nvcc"
+  fi
+fi
+# Whatever path we took, the seat must now be a wrapper over a REAL compiler.
+if ! "$PREFIX/bin/nvcc.real" --version >/dev/null 2>&1; then
+  echo "::error::\$PREFIX/bin/nvcc.real does not behave like a compiler -- refusing to build with a corrupt nvcc seat" >&2
+  exit 1
 fi
 export CUW_REAL_NVCC="$PREFIX/bin/nvcc.real"
 export CUW_CCACHE_BIN="$CCACHE_BIN"

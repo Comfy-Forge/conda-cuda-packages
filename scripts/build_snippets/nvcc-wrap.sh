@@ -1,4 +1,7 @@
 #!/bin/sh
+# CUW_WRAPPER_MARKER — build.sh greps for this string to tell "the seat is
+# already ours" from "this is the real compiler". Without that distinction a
+# re-entered build moves the wrapper onto nvcc.real and recurses forever.
 # Occupies the nvcc seat ($PREFIX/bin/nvcc, real binary moved to nvcc.real),
 # because torch's cpp_extension invokes that path directly and never consults
 # PATH. Does three jobs at once:
