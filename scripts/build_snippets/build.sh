@@ -29,6 +29,34 @@ if [ "${CC_MAJOR:-0}" -lt 4 ]; then
   exit 1
 fi
 
+# ---- $PREFIX must look untouched by the time rattler-build packages -----
+# rattler-build ships "files that appeared in $PREFIX during the build". The
+# nvcc seat swap below leaves `bin/nvcc.real` behind and the CUDA header
+# bridge further down creates symlinks under `include/`; both are new paths in
+# $PREFIX, so both get PACKAGED. Measured, not theorised: the first
+# torchvision pilot shipped a 27.5 MB `bin/nvcc.real` -- the real CUDA
+# compiler -- fully declared in paths.json, and every package this repo has
+# ever built carries the same passenger.
+#
+# So everything this script creates inside $PREFIX is recorded here and undone
+# on EXIT, on every path out: shard mode exits 0 early, a failed compile exits
+# non-zero, and both must still leave a clean prefix behind.
+CUW_PREFIX_TRACK="$CUW_DIR/prefix-added.txt"
+: > "$CUW_PREFIX_TRACK"
+cuw_restore_prefix() {
+  rc=$?
+  # Put the real compiler back in its seat. Guarded on the marker so this
+  # cannot clobber a real nvcc if the swap never happened.
+  if [ -e "$BUILD_PREFIX/bin/nvcc.real" ] && grep -q 'CUW_WRAPPER_MARKER' "$BUILD_PREFIX/bin/nvcc" 2>/dev/null; then
+    mv -f "$BUILD_PREFIX/bin/nvcc.real" "$BUILD_PREFIX/bin/nvcc" || true
+  fi
+  while IFS= read -r added; do
+    [ -n "$added" ] && rm -f "$added" || true
+  done < "$CUW_PREFIX_TRACK"
+  return $rc
+}
+trap cuw_restore_prefix EXIT
+
 # ---- the wrapper goes in the nvcc SEAT, not on PATH ---------------------
 # torch's cpp_extension invokes "$CUDA_HOME/bin/nvcc" by absolute path, so a
 # PATH-based shim is simply never consulted. Move the real binary aside and
@@ -39,33 +67,89 @@ fi
 # fresh wrapper on top, so nvcc execs ccache on a script that execs ccache on
 # itself. That does not fail — it recurses forever, and in CI it burns the
 # whole job timeout with no error. Measured the hard way, step 0.
-if [ -f "$PREFIX/bin/nvcc" ]; then
-  if grep -q 'CUW_WRAPPER_MARKER' "$PREFIX/bin/nvcc" 2>/dev/null; then
+if [ -f "$BUILD_PREFIX/bin/nvcc" ]; then
+  if grep -q 'CUW_WRAPPER_MARKER' "$BUILD_PREFIX/bin/nvcc" 2>/dev/null; then
     # already ours: leave the seat alone, and make sure the real binary is
     # still behind it rather than silently recursing.
-    if [ ! -x "$PREFIX/bin/nvcc.real" ] || grep -q 'CUW_WRAPPER_MARKER' "$PREFIX/bin/nvcc.real" 2>/dev/null; then
-      echo "::error::\$PREFIX/bin/nvcc is the cuw wrapper but nvcc.real is missing or is itself a wrapper -- the nvcc seat is corrupt and would recurse forever" >&2
+    if [ ! -x "$BUILD_PREFIX/bin/nvcc.real" ] || grep -q 'CUW_WRAPPER_MARKER' "$BUILD_PREFIX/bin/nvcc.real" 2>/dev/null; then
+      echo "::error::\$BUILD_PREFIX/bin/nvcc is the cuw wrapper but nvcc.real is missing or is itself a wrapper -- the nvcc seat is corrupt and would recurse forever" >&2
       exit 1
     fi
     echo "nvcc seat already wrapped; reusing"
-  elif [ ! -f "$PREFIX/bin/nvcc.real" ]; then
-    mv "$PREFIX/bin/nvcc" "$PREFIX/bin/nvcc.real"
-    install -m 0755 "$RECIPE_DIR/nvcc-wrap.sh" "$PREFIX/bin/nvcc"
+  elif [ ! -f "$BUILD_PREFIX/bin/nvcc.real" ]; then
+    mv "$BUILD_PREFIX/bin/nvcc" "$BUILD_PREFIX/bin/nvcc.real"
+    install -m 0755 "$RECIPE_DIR/nvcc-wrap.sh" "$BUILD_PREFIX/bin/nvcc"
   fi
 fi
 # Whatever path we took, the seat must now be a wrapper over a REAL compiler.
-if ! "$PREFIX/bin/nvcc.real" --version >/dev/null 2>&1; then
-  echo "::error::\$PREFIX/bin/nvcc.real does not behave like a compiler -- refusing to build with a corrupt nvcc seat" >&2
+if ! "$BUILD_PREFIX/bin/nvcc.real" --version >/dev/null 2>&1; then
+  echo "::error::\$BUILD_PREFIX/bin/nvcc.real does not behave like a compiler -- refusing to build with a corrupt nvcc seat" >&2
   exit 1
 fi
-export CUW_REAL_NVCC="$PREFIX/bin/nvcc.real"
+export CUW_REAL_NVCC="$BUILD_PREFIX/bin/nvcc.real"
 export CUW_CCACHE_BIN="$CCACHE_BIN"
 
-export CUDA_HOME="$PREFIX"
-export PYTORCH_NVCC="$PREFIX/bin/nvcc"   # torch's ninja writer honours this
-export CUDACXX="$PREFIX/bin/nvcc"        # cmake honours this
+export CUDA_HOME="$BUILD_PREFIX"
+export PYTORCH_NVCC="$BUILD_PREFIX/bin/nvcc"   # torch's ninja writer honours this
+export CUDACXX="$BUILD_PREFIX/bin/nvcc"        # cmake honours this
 # Trailing, so it beats any --threads a setup.py hardcodes earlier in the line.
 export NVCC_APPEND_FLAGS="${NVCC_APPEND_FLAGS:-} --threads ${CUW_NVCC_THREADS:-1}"
+
+# ---- CUDA headers: bridge conda-forge's targets/ layout -----------------
+# conda-forge's CUDA packages install headers under
+# $<prefix>/targets/<arch>/include, NOT $<prefix>/include. Anything that
+# merely COMPILES is fine, because the activation scripts add the -I.
+# Anything that PROBES for a header by path is not: it concludes the library
+# is absent. torchvision does exactly that for nvjpeg (it stats
+# "$CUDA_HOME/include/nvjpeg.h") and built without GPU JPEG support while
+# libnvjpeg-dev sat installed in host: and its run_export was already on the
+# finished package -- which is what rattler-build's "Overdepending against
+# libnvjpeg" warning was really saying.
+#
+# Sources are searched BUILD_PREFIX first, then PREFIX, and a link is only
+# ever created where nothing exists yet. That order is load-bearing: the CUDA
+# toolkit is pinned to the cell in the build env while host: still resolves to
+# whatever `cuda-version` torch's triton drags in, so build's cuda.h must win.
+# The bridge writes into $CUDA_HOME/include, which is inside BUILD_PREFIX and
+# therefore never scanned for packaging; the EXIT trap removes it regardless.
+mkdir -p "$CUDA_HOME/include"
+for cuw_inc in "$BUILD_PREFIX"/targets/*/include "$PREFIX"/targets/*/include; do
+  [ -d "$cuw_inc" ] || continue
+  cuw_linked=0
+  for cuw_h in "$cuw_inc"/*; do
+    cuw_b="$(basename "$cuw_h")"
+    # -e is false for a dangling symlink, so test -L as well: without it the
+    # ln below fails on an existing-but-broken link and the loop is noisy.
+    if [ -e "$CUDA_HOME/include/$cuw_b" ] || [ -L "$CUDA_HOME/include/$cuw_b" ]; then continue; fi
+    ln -s "$cuw_h" "$CUDA_HOME/include/$cuw_b" || continue
+    echo "$CUDA_HOME/include/$cuw_b" >> "$CUW_PREFIX_TRACK"
+    cuw_linked=$((cuw_linked + 1))
+  done
+  echo "cuda header bridge: linked $cuw_linked entr(ies) from $cuw_inc"
+done
+
+# ---- and the cell's headers must come FIRST -----------------------------
+# Pinning the toolkit in build: is necessary but not sufficient. The HOST
+# env's CUDA activation prepends -I$PREFIX/targets/<arch>/include to
+# CPPFLAGS/CFLAGS/CXXFLAGS, and host's cuda-version is dragged to whatever
+# torch's triton needs -- so the cell's headers are on the command line but
+# LOSE. Measured on the TU that bakes in CUDA_VERSION (torchaudio's
+# utils.cpp): $PREFIX/targets/.../include at positions 1, 2, 4 and 6, the
+# build prefix's headers at position 11. The result compiled 12090 into a
+# cell labelled cuda128 and torchaudio refused to load beside its own torch.
+# The competing -I lives in these same variables, so putting ours in front of
+# them is the whole fix, and the order stops being anyone else's to decide.
+export CPPFLAGS="-I$CUDA_HOME/include ${CPPFLAGS:-}"
+export CFLAGS="-I$CUDA_HOME/include ${CFLAGS:-}"
+export CXXFLAGS="-I$CUDA_HOME/include ${CXXFLAGS:-}"
+export NVCC_PREPEND_FLAGS="-I$CUDA_HOME/include ${NVCC_PREPEND_FLAGS:-}"
+
+# ---- package-declared build environment (package.yml `build_env`) -------
+# Values computed from $PREFIX cannot live in the recipe's build.script.env:
+# rattler-build sets those LITERALLY, with no shell expansion, so a
+# "$PREFIX/include" written there arrives at setup.py as those exact 15
+# characters. They are rendered here instead, where $PREFIX is real.
+# CUW_BUILD_ENV_HOOK
 
 echo "=== cuw build ==================================================="
 echo "  mode        : ${CUW_MODE}"

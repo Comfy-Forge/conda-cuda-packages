@@ -112,6 +112,29 @@ requirements:
     - ninja
     - if: linux
       then: patchelf
+    # ---- the CUDA TOOLKIT lives HERE, pinned, and NOT in host: -----------
+    # `cuda_compiler_version` used to name the build string and constrain
+    # NOTHING, so a cell labelled cuda128 compiled against whatever CUDA the
+    # host solve happened to pick. It always picked 12.9: our pytorch pulls
+    # triton, and conda-torch's triton 3.6.0 exists only as cuda129/cuda13x,
+    # so `cuda-version` in host: is pinned to 12.9 by torch itself and a
+    # `cuda-version 12.8.*` there is UNSAT (measured: "triton 3.6.0 would
+    # require cuda-version >=12.9,<13"). torchaudio is the one upstream that
+    # checks: it compiles CUDA_VERSION from <cuda.h> into the extension and
+    # refuses to load beside a torch reporting a different minor --
+    #   "PyTorch has CUDA version 12.8 whereas TorchAudio has CUDA version 12.9"
+    # -- which is how a silent repo-wide mislabel became visible.
+    #
+    # The build environment is solved SEPARATELY and has no torch in it, so it
+    # can be pinned to the cell. cuda.h and cuda_runtime.h ship only in
+    # cuda-cudart-dev, so with the toolkit here and absent from host: there is
+    # exactly one of each on the include path and no ordering to get wrong.
+    # Compiling against the cell's CUDA and running against the >= runtime the
+    # run_export asks for is the safe direction; the reverse is not.
+    - cuda-version ${{ cuda_compiler_version }}.*
+    - cuda-nvcc
+    - cuda-cudart-dev
+    - cuda-cccl
   host:
     - python ${{ python }}.*
     # python_abi's run_export is what puts a real interpreter-ABI bound on the
@@ -143,10 +166,6 @@ requirements:
     - libcufft-dev
     - libcurand-dev
 <%- endif %>
-    # Unpinned minor, deliberately — see the header note.
-    - cuda-nvcc
-    - cuda-cudart-dev
-    - cuda-cccl
 <%- for dep in host_deps %>
     - << dep >>
 <%- endfor %>

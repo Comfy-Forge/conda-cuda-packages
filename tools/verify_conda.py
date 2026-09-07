@@ -155,6 +155,21 @@ def verify(path: Path, ledger: set, expect_arch: str, tmp: Path) -> bool:
     rep.check(any(d.split(" ", 1)[0] == "__cuda" for d in depends),
               "declares __cuda directly (GPU requirement readable without a closure walk)")
 
+    # ---- no build-toolchain passengers -------------------------------------
+    # rattler-build ships whatever appeared in $PREFIX during the build, and
+    # build.sh mutates $PREFIX on purpose: it moves the real nvcc aside to put
+    # a ccache wrapper in its seat. `bin/nvcc.real` is then a NEW file, so it
+    # was packaged -- a 27.5 MB CUDA compiler inside torchvision, declared in
+    # paths.json, in every artifact this repo had built. build.sh now restores
+    # the prefix on exit; this asserts it, because the failure is completely
+    # silent otherwise (the package installs, imports and works).
+    STOWAWAY = re.compile(
+        r"(^|/)(nvcc|cicc|cudafe\+\+|ptxas|nvlink|fatbinary|nvdisasm|cuobjdump"
+        r"|ninja|ccache|patchelf|cc1|cc1plus|ld|as)(\.real)?$")
+    stowaways = sorted(n for n in payload if STOWAWAY.search(n))
+    rep.check(not stowaways,
+              f"ships no build-toolchain binaries ({stowaways[:3]})")
+
     # ---- no vendored torch --------------------------------------------------
     vendored_torch = [n for n in payload
                       if re.search(r"(^|/)(lib)?torch(_cpu|_cuda|_python)?\.(so|dll)", n)]

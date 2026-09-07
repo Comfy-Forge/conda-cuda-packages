@@ -228,6 +228,36 @@ def _check_family_versions(cfg: dict, pkg_dir: Path) -> None:
                 f"'2.11.0'; the package's own version goes in `version`.")
 
 
+def _check_build_env(cfg: dict, pkg_dir: Path) -> None:
+    """`build_env` is rendered into the build script as `export K="V"`.
+
+    It exists for values that must be computed from $PREFIX, which the
+    recipe's own `build.script.env` cannot express (rattler-build sets those
+    literally, no shell expansion). Because the value lands inside double
+    quotes in a generated shell script, a quote or a backtick in it would end
+    the string and run whatever follows -- so the value is constrained here
+    rather than trusted.
+    """
+    env = cfg.get("build_env")
+    if env is None:
+        return
+    if not isinstance(env, dict) or not env:
+        raise SystemExit(
+            f"ERROR: {pkg_dir.name}/package.yml: build_env must be a non-empty "
+            f"mapping of NAME -> value.")
+    for k, v in env.items():
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(k)):
+            raise SystemExit(
+                f"ERROR: {pkg_dir.name}/package.yml: build_env key {k!r} is not "
+                f"a shell variable name.")
+        if re.search(r'["`$][({]|["`]|\\', str(v)):
+            raise SystemExit(
+                f"ERROR: {pkg_dir.name}/package.yml: build_env[{k!r}] value "
+                f"{v!r} contains a quote, backtick, backslash or command "
+                f"substitution -- it is rendered into a shell script inside "
+                f'double quotes. Plain text and $VAR references only.')
+
+
 def load_package(pkg_dir: Path) -> dict:
     """One package's flat config dict, overrides merged in."""
     cfg = yaml.safe_load((pkg_dir / "package.yml").read_text()) or {}
@@ -251,6 +281,7 @@ def load_package(pkg_dir: Path) -> dict:
                 f"defaults/ must say why (add an '## Overrides' section).")
 
     _check_family_versions(cfg, pkg_dir)
+    _check_build_env(cfg, pkg_dir)
 
     # A family package (torchvision, torchaudio) has no single version: its
     # version is a function of the torch it builds against, so the matrix

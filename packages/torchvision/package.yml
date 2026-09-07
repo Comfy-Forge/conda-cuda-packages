@@ -83,6 +83,23 @@ host_deps:
   - libzlib
   - libnvjpeg-dev
 
+# torchvision's setup.py does not ASK the compiler whether a codec is
+# available -- it stats a header, in TORCHVISION_INCLUDE, then $BUILD_PREFIX,
+# then $CONDA_PREFIX, then /usr/include. Under rattler-build the host prefix is
+# $PREFIX, which is none of those, so the first pilot build printed "Building
+# torchvision without JPEG support" / "without WEBP support" with
+# libjpeg-turbo and libwebp-base sitting installed in host:, and shipped an
+# image extension linking libpng alone. (PNG survived only because upstream
+# finds it through `libpng-config` on PATH instead.) The failure is silent:
+# the package still builds, still imports, and still carries the codec
+# run_exports -- decode_jpeg just raises at runtime. Point upstream's own
+# search at the host prefix. nvjpeg is NOT covered by these: it is found via
+# $CUDA_HOME/include, which build.sh bridges for conda-forge's targets/
+# layout.
+build_env:
+  TORCHVISION_INCLUDE: $PREFIX/include
+  TORCHVISION_LIBRARY: $PREFIX/lib
+
 # conda-forge ships a `torchvision`, so carrying any build of this name hides
 # theirs under strict channel priority. Owner decision: carry it completely.
 carry: complete

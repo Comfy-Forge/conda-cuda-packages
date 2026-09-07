@@ -85,6 +85,31 @@ def newest_family_pair(cfg: dict) -> tuple[str, str]:
     return fv[newest]["version"], fv[newest]["source_rev"]
 
 
+def build_env_block(cfg: dict) -> str:
+    """package.yml `build_env` -> shell exports, substituted into build.sh.
+
+    These cannot go in the recipe's `build.script.env`: rattler-build sets
+    those values literally, so a `$PREFIX/include` written there reaches the
+    build as that string, not as a path. Rendering them into the script puts
+    them where $PREFIX is a real directory. Values are emitted inside double
+    quotes so $PREFIX expands and word-splitting cannot bite.
+    """
+    env = cfg.get("build_env") or {}
+    if not env:
+        return "# (none declared)"
+    return "\n".join(f'export {k}="{v}"' for k, v in env.items())
+
+
+def _build_sh(cfg: dict) -> str:
+    """The shared build script with this package's build_env substituted in."""
+    text = BUILD_SH.read_text().rstrip("\n")
+    hook = "# CUW_BUILD_ENV_HOOK"
+    if hook not in text:
+        sys.exit("scripts/build_snippets/build.sh lost its # CUW_BUILD_ENV_HOOK "
+                 "marker -- package.yml build_env would be silently dropped")
+    return text.replace(hook, build_env_block(cfg))
+
+
 def render(folder: str, cfg: dict, env) -> str:
     tmpl = env.get_template(TEMPLATE.name)
     family = bool(cfg.get("family_versions"))
@@ -110,7 +135,7 @@ def render(folder: str, cfg: dict, env) -> str:
         homepage=cfg.get("homepage", f"https://github.com/{cfg.get('source_repo','')}"),
         license=_license(cfg),
         summary=cfg.get("summary", cfg["name"]),
-        build_sh=BUILD_SH.read_text().rstrip("\n"),
+        build_sh=_build_sh(cfg),
     ) + "\n"
 
 

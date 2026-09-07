@@ -122,10 +122,22 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--package", required=True)
     ap.add_argument("--output-dir", type=Path, default=Path("staging"))
+    ap.add_argument("--versions", default="",
+                    help="comma-separated versions to fetch (family packages "
+                         "have one revision each; default is all of them, "
+                         "which is 16 clones for torchvision)")
     args = ap.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    wanted = {v.strip() for v in args.versions.split(",") if v.strip()}
     for _folder, cfg in load_packages(args.package):
-        for version, rev in revs_for(cfg):
+        pairs = revs_for(cfg)
+        if wanted:
+            picked = [(v, r) for v, r in pairs if v in wanted]
+            if not picked:
+                sys.exit(f"{cfg['name']}: no revision matches --versions "
+                         f"{sorted(wanted)}; it has {[v for v, _ in pairs]}")
+            pairs = picked
+        for version, rev in pairs:
             fetch_one(cfg, args.output_dir, version=version, rev=rev)
     return 0
 
