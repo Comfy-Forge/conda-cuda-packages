@@ -1,4 +1,4 @@
-{#-
+<#-
   The single recipe template. `scripts/generate_recipes.py` renders this once
   per package into `recipes/<name>/recipe.yaml`, which is COMMITTED and
   drift-checked in CI. Never hand-edit a generated recipe: fix the template
@@ -17,10 +17,10 @@
      `cuda-cudart-dev 12.8.*` forces `cuda-version >=12.8,<12.9`, which is
      UNSAT against a pytorch whose `triton` pin is cuda129-only. The window
      comes from the pytorch we build against; we just live inside it.
--#}
+-#>
 context:
-  name: {{ conda_name }}
-  version: "{{ version }}"
+  name: << conda_name >>
+  version: "<< version >>"
   cuda_short: ${{ cuda_compiler_version | replace('.', '') }}
   torch_nodot: ${{ pytorch | replace('.', '') }}
   py_nodot: ${{ python | replace('.', '') }}
@@ -42,19 +42,22 @@ build:
   script:
     env:
       # ---- what the build is ------------------------------------------
-      TORCH_CUDA_ARCH_LIST: {{ arch_list | tojson }}
+      # Per-CELL, not per-package: the arch list depends on the CUDA version
+      # (a cu124 build has no sm_100/sm_120), so the matrix supplies it and
+      # the recipe must not bake in a single package-level value.
+      TORCH_CUDA_ARCH_LIST: ${{ env.get("CUW_ARCH_LIST", default="<< arch_list >>") }}
       FORCE_CUDA: "1"
-      MAX_JOBS: "{{ jobs }}"
-      CUW_NVCC_THREADS: "{{ nvcc_threads }}"
-{%- if force_source_build %}
+      MAX_JOBS: "<< jobs >>"
+      CUW_NVCC_THREADS: "<< nvcc_threads >>"
+<%- if force_source_build %>
       # ---- L2: force-source flags, declared per package ----------------
       # Upstream build scripts that will silently download a prebuilt binary
       # unless told otherwise. Values are the exact strings upstream tests
       # for; note flash-attn compares against "TRUE", so "1" is a no-op.
-{%- for k, v in force_source_build.items() %}
-      {{ k }}: {{ v | tojson }}
-{%- endfor %}
-{%- endif %}
+<%- for k, v in force_source_build.items() %>
+      << k >>: << v | tojson >>
+<%- endfor %>
+<%- endif %>
       # ---- ccache: config must live HERE, not in the outer shell -------
       CUW_MODE: ${{ env.get("CUW_MODE", default="full") }}
       CUW_SHARD_INDEX: ${{ env.get("CUW_SHARD_INDEX", default="0") }}
@@ -78,7 +81,7 @@ build:
     content:
       - if: unix
         then: |
-{{ build_sh | indent(10, true) }}
+<< build_sh | indent(10, true) >>
       - if: win
         then: |
           :: NOT WIRED FOR v1 — linux-64 only (see docs/ARCHITECTURE.md#scope).
@@ -98,43 +101,43 @@ requirements:
     - python ${{ python }}.*
     - pip
     - setuptools
-{%- if links_torch %}
+<%- if links_torch %>
     # The exact torch this compiles against. The build glob is what locks the
     # CUDA flavour: run_exports cannot express it (it derives from the host
     # package's VERSION, not its build string), so a bare minor range would
     # let a cu130 torch satisfy a cu128 extension.
     - pytorch ${{ pytorch }}.* cuda${{ cuda_short }}_*
-{%- endif %}
+<%- endif %>
     # Unpinned minor, deliberately — see the header note.
     - cuda-nvcc
     - cuda-cudart-dev
     - cuda-cccl
-{%- for dep in host_deps %}
-    - {{ dep }}
-{%- endfor %}
+<%- for dep in host_deps %>
+    - << dep >>
+<%- endfor %>
   run:
     - python
-{%- if links_torch %}
+<%- if links_torch %>
     # Same glob in run:, so an installed extension can never sit beside a
     # torch of a different flavour.
     - pytorch ${{ pytorch }}.* cuda${{ cuda_short }}_*
-{%- endif %}
-{%- for dep in run_deps %}
-    - {{ dep }}
-{%- endfor %}
+<%- endif %>
+<%- for dep in run_deps %>
+    - << dep >>
+<%- endfor %>
 
-{%- if import_name %}
+<%- if import_name %>
 
 tests:
   - python:
       imports:
-        - {{ import_name }}
-{%- endif %}
+        - << import_name >>
+<%- endif %>
 
 about:
-  homepage: {{ homepage | tojson }}
-  license: {{ license | tojson }}
-  summary: {{ summary | tojson }}
+  homepage: << homepage | tojson >>
+  license: << license | tojson >>
+  summary: << summary | tojson >>
 
 extra:
   # Provenance: the from-source guarantee, recorded in the artifact so it is
@@ -142,10 +145,10 @@ extra:
   built_from_source: true
   prebuilt_wheel_used: false
   source:
-    repo: {{ source_repo | tojson }}
-    commit: {{ source_rev | tojson }}
+    repo: << source_repo | tojson >>
+    commit: << source_rev | tojson >>
   torch_build: ${{ env.get("CUW_TORCH_BUILD", default="unrecorded") }}
   cuda_compiler_version: ${{ cuda_compiler_version }}
-  arch_list: {{ arch_list | tojson }}
+  arch_list: ${{ env.get("CUW_ARCH_LIST", default="<< arch_list >>") }}
   run_id: ${{ env.get("GITHUB_RUN_ID", default="local") }}
   run_url: ${{ env.get("CUW_RUN_URL", default="local") }}

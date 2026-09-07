@@ -89,7 +89,14 @@ def main() -> int:
     except ImportError:
         sys.exit("jinja2 is required: pip install jinja2")
 
+    # Non-default delimiters: rattler-build recipes are themselves jinja and
+    # use ${{ ... }} / {% ... %}. If the generator used the same markers it
+    # would try to evaluate rattler's expressions at generation time and fail
+    # on undefined build-time variables like cuda_compiler_version.
     env = Environment(loader=FileSystemLoader(str(TEMPLATE.parent)),
+                      variable_start_string="<<", variable_end_string=">>",
+                      block_start_string="<%", block_end_string="%>",
+                      comment_start_string="<#", comment_end_string="#>",
                       undefined=StrictUndefined, keep_trailing_newline=True)
 
     stale = []

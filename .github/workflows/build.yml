@@ -116,6 +116,7 @@ jobs:
           CUW_SHARD_COUNT: ${{ matrix.cell.shard_count }}
           CUW_SRC_TARBALL: ${{ github.workspace }}/staging/${{ matrix.cell.package }}-source.tar.gz
           CUW_TORCH_BUILD: ${{ matrix.cell.torch_build }}
+          CUW_ARCH_LIST: ${{ matrix.cell.arch_list }}
           CUW_BUILD_NUMBER: ${{ inputs.build_number }}
           CUW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RECIPE: recipes/${{ matrix.cell.conda_name }}/recipe.yaml
@@ -181,6 +182,7 @@ jobs:
           CUW_SHARD_COUNT: "0"
           CUW_SRC_TARBALL: ${{ github.workspace }}/staging/${{ matrix.cell.package }}-source.tar.gz
           CUW_TORCH_BUILD: ${{ matrix.cell.torch_build }}
+          CUW_ARCH_LIST: ${{ matrix.cell.arch_list }}
           CUW_BUILD_NUMBER: ${{ inputs.build_number }}
           CUW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RECIPE: recipes/${{ matrix.cell.conda_name }}/recipe.yaml
