@@ -1,0 +1,50 @@
+{
+ "arch": "x86_64",
+ "build": "cuda126_torch29_py314_h2aa5325_0",
+ "build_number": 0,
+ "depends": [
+  "python",
+  "__cuda",
+  "pytorch 2.9.* cuda126_*",
+  "numpy",
+  "pillow >=5.3.0",
+  "libstdcxx >=13",
+  "libgcc >=13",
+  "__glibc >=2.28,<3.0.a0",
+  "libjpeg-turbo >=3.2.0,<4.0a0",
+  "python_abi 3.14.* *_cp314",
+  "libcusolver >=11.7.5.82,<12.0a0",
+  "libpng >=1.6.58,<1.7.0a0",
+  "libcublas >=12.9.2.10,<13.0a0",
+  "libzlib >=1.3.2,<2.0a0",
+  "libcurand >=10.3.10.19,<11.0a0",
+  "libcufft >=11.4.1.4,<12.0a0",
+  "pytorch >=2.9.1,<2.10.0a0",
+  "libtorch >=2.9.1,<2.10.0a0",
+  "libnvjpeg >=12.4.0.76,<13.0a0",
+  "libcusparse >=12.5.10.65,<13.0a0",
+  "libwebp-base >=1.6.0,<2.0a0"
+ ],
+ "license": "BSD-3-Clause",
+ "md5": "0c7f905d19ca8893d9d5599d17e252f5",
+ "name": "torchvision",
+ "platform": "linux",
+ "provenance": {
+  "arch_list": "5.0 6.0 7.0 7.5 8.0 8.6 9.0+PTX",
+  "built_from_source": true,
+  "cuda_compiler_version": "12.6",
+  "prebuilt_wheel_used": false,
+  "run_id": "34138928544",
+  "run_url": "https://github.com/Comfy-Forge/conda-cuda-packages/actions/runs/34138928544",
+  "source_rev": "d801a34632023859a0a274803d6abaf0a45d77a5",
+  "torch_build": "cuda126_repack_py314_hc8f6b871_3"
+ },
+ "purls": [
+  "pkg:pypi/torchvision@0.24.1"
+ ],
+ "sha256": "fb66fb274e21fe6541d85e5ae64dee0b0f2079a99e18f140439909fc059d90ca",
+ "size": 2918392,
+ "subdir": "linux-64",
+ "timestamp": 1788795940360,
+ "version": "0.24.1"
+}
