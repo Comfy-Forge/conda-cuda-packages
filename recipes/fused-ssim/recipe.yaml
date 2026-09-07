@@ -248,6 +248,18 @@ requirements:
     # package's VERSION, not its build string), so a bare minor range would
     # let a cu130 torch satisfy a cu128 extension.
     - pytorch ${{ pytorch }}.* cuda${{ cuda_short }}_*
+    # torch's OWN headers include these, so every torch-linked extension needs
+    # them regardless of what its sources reference: ATen/cuda/CUDAContextLight.h
+    # includes <cusparse.h>, and the CUDAContext.h chain pulls the rest.
+    # Measured: without libcusparse-dev the compile dies with
+    # "fatal error: cusparse.h: No such file or directory".
+    # This is the torch-implied floor; anything a package's own sources include
+    # goes in its package.yml host_deps instead of here.
+    - libcusparse-dev
+    - libcublas-dev
+    - libcusolver-dev
+    - libcufft-dev
+    - libcurand-dev
     # Unpinned minor, deliberately — see the header note.
     - cuda-nvcc
     - cuda-cudart-dev
