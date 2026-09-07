@@ -1,0 +1,6 @@
+output/
+work/
+__pycache__/
+*.pyc
+site/
+.pixi/
