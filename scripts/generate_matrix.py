@@ -75,6 +75,52 @@ def torch_cells(subdir: str, cache: Path) -> dict:
     return {k: v[0] for k, v in out.items()}
 
 
+PYTORCH_INDEX = "https://download.pytorch.org/whl"
+_PLAT_TAG = {
+    "manylinux_2_28_x86_64": "linux-64", "linux_x86_64": "linux-64",
+    "manylinux_2_28_aarch64": "linux-aarch64", "linux_aarch64": "linux-aarch64",
+    "win_amd64": "win-64",
+}
+
+
+def upstream_cells(pypi_name: str, flavours, cache: Path) -> set:
+    """{(version, cuda, python, subdir)} that upstream actually publishes.
+
+    Only for FAMILY packages: torchvision/torchaudio ship official per-flavour
+    wheels, and building a combo upstream never shipped would invent a
+    pairing nobody has ever tested. Everything else in this repo is built for
+    whatever torch exists, because upstream ships no CUDA-flavoured wheel of
+    it at all.
+
+    The `+cuNNN` local tag is REQUIRED to count. Every flavour directory also
+    lists tag-less wheels (torchvision 0.16.x, torchaudio 0.4.0 ... 2.2.0),
+    which are the same default-flavour files repeated in all six directories
+    -- counting them would claim, for example, a cu132 torchaudio 2.2.0 that
+    does not exist as a cu132 build.
+    """
+    out = set()
+    for fl in flavours:
+        cu = "cu" + fl.replace(".", "")
+        local = cache / f"upstream-{pypi_name}-{cu}.html"
+        if not local.is_file():
+            cache.mkdir(parents=True, exist_ok=True)
+            url = f"{PYTORCH_INDEX}/{cu}/{pypi_name}/"
+            print(f"fetching {url}", file=sys.stderr)
+            req = urllib.request.Request(url, headers={"User-Agent": "conda-cuda-packages"})
+            try:
+                local.write_bytes(urllib.request.urlopen(req, timeout=300).read())
+            except Exception as exc:                      # noqa: BLE001
+                print(f"  !! {url}: {exc}", file=sys.stderr)
+                continue
+        html = local.read_text(errors="replace")
+        pat = rf"{re.escape(pypi_name)}-([0-9][0-9.]*)\+{cu}-cp(\d+)-cp\d+(t?)-([a-z0-9_]+)\.whl"
+        for ver, py, freethreaded, plat in re.findall(pat, html):
+            if freethreaded or plat not in _PLAT_TAG:
+                continue      # freethreaded ABI is a separate axis, not built
+            out.add((ver, fl, f"{py[0]}.{py[1:]}", _PLAT_TAG[plat]))
+    return out
+
+
 _PRERELEASE = re.compile(r"[abc]|rc|dev", re.I)
 
 
@@ -166,6 +212,17 @@ def main() -> int:
     py_min = tuple(int(x) for x in str(policy["python_min"]).split("."))
     jobs = []
 
+    # ---- family packages: version is a function of the torch built against --
+    family = cfg.get("family_versions") or {}
+    upstream = None
+    holes = {"no_pairing": set(), "not_published": set()}
+    if family:
+        upstream = upstream_cells(cfg["pypi_name"], policy["supported_cudas"],
+                                  args.cache_dir)
+        print(f"  upstream publishes {len(upstream)} tagged {cfg['pypi_name']} "
+              f"cells across {len(policy['supported_cudas'])} flavours",
+              file=sys.stderr)
+
     for subdir in platforms:
         cells = torch_cells(policy["torch_subdir"][subdir], args.cache_dir)
         buildable_py = stable_pythons(subdir, args.cache_dir)
@@ -195,6 +252,24 @@ def main() -> int:
                     continue
                 seen_no_torch.add((cuda, python))
 
+            # A family package's own version and source come from the torch
+            # version of the cell. Two distinct holes, both named rather than
+            # silently dropped:
+            #   no_pairing    -- no release of ours goes with that torch
+            #   not_published -- the pair exists but upstream never shipped
+            #                    that (version, flavour, python) wheel, so no
+            #                    one has ever run this combination
+            cell_version, cell_rev = cfg.get("version"), cfg.get("source_rev")
+            if family:
+                entry = family.get(torch_version)
+                if entry is None:
+                    holes["no_pairing"].add((torch_version, cuda, python))
+                    continue
+                cell_version, cell_rev = entry["version"], entry["source_rev"]
+                if (cell_version, cuda, python, subdir) not in upstream:
+                    holes["not_published"].add((cell_version, cuda, python))
+                    continue
+
             arch = arch_list_for(cfg, arch_policy, cuda, torch_version, subdir)
             if not arch:
                 continue  # a CUDA line absent from the arch table is not built
@@ -203,9 +278,9 @@ def main() -> int:
                 jobs.append({
                     "package": cfg["name"],
                     "folder": args.package,
-                    "version": cfg["version"],
+                    "version": cell_version,
                     "source_repo": cfg["source_repo"],
-                    "source_rev": cfg["source_rev"],
+                    "source_rev": cell_rev,
                     "cuda": cuda,
                     "cuda_short": cuda.replace(".", ""),
                     "pytorch": minor,
@@ -229,7 +304,20 @@ def main() -> int:
                     "runner": policy["runners"][subdir],
                     "build_string": build_string(cfg, cuda, torch_version, python,
                                                  args.build_number),
+                    "family": bool(family),
                 })
+        if holes["no_pairing"]:
+            pairs = sorted({t for t, _, _ in holes["no_pairing"]})
+            print(f"  {subdir}: HOLE, no {cfg['name']} release pairs with torch "
+                  f"{pairs} -- upstream never shipped one", file=sys.stderr)
+        if holes["not_published"]:
+            byfl = {}
+            for ver, cu, _py in sorted(holes["not_published"]):
+                byfl.setdefault(cu, set()).add(ver)
+            for cu, vers in sorted(byfl.items()):
+                print(f"  {subdir}: HOLE, {cfg['name']} {sorted(vers)} has no "
+                      f"upstream {cu} wheel -- combination never published",
+                      file=sys.stderr)
         if skipped_py:
             print(f"  {subdir}: skipped python {sorted(skipped_py)} -- conda-torch "
                   f"has builds but conda-forge ships no stable python there yet",

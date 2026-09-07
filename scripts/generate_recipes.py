@@ -73,13 +73,32 @@ def _license(cfg: dict) -> str:
     return "LicenseRef-Unspecified"
 
 
+def newest_family_pair(cfg: dict) -> tuple[str, str]:
+    """(version, source_rev) of the newest torch pairing, as recipe defaults.
+
+    A family recipe takes its version from the matrix at build time, but the
+    committed file still needs a real default so it is reviewable and can be
+    built by hand. The newest pairing is the least surprising choice.
+    """
+    fv = cfg["family_versions"]
+    newest = max(fv, key=lambda v: [int(x) for x in v.split(".")])
+    return fv[newest]["version"], fv[newest]["source_rev"]
+
+
 def render(folder: str, cfg: dict, env) -> str:
     tmpl = env.get_template(TEMPLATE.name)
+    family = bool(cfg.get("family_versions"))
+    if family:
+        default_version, default_rev = newest_family_pair(cfg)
+    else:
+        default_version = cfg.get("version", "0.0.0")
+        default_rev = cfg.get("source_rev") or cfg.get("source_tag", "")
     return tmpl.render(
         conda_name=conda_name(cfg),
-        version=cfg.get("version", "0.0.0"),
+        family=family,
+        version=default_version,
         source_repo=cfg.get("source_repo", ""),
-        source_rev=cfg.get("source_rev") or cfg.get("source_tag", ""),
+        source_rev=default_rev,
         arch_list=cfg.get("arch_list", ""),
         jobs=cfg["jobs"],
         nvcc_threads=cfg["nvcc_threads"],

@@ -20,7 +20,16 @@
 -#>
 context:
   name: << conda_name >>
+<%- if family %>
+  # FAMILY package (torchvision/torchaudio): the version is a function of the
+  # torch being built against — torchvision 0.26.0 goes with torch 2.11.0 —
+  # so one committed recipe serves every pairing and the matrix supplies the
+  # cell's version and revision. The defaults are the newest pairing, so a
+  # hand-run without the env still builds something real and reviewable.
+  version: ${{ env.get("CUW_VERSION", default="<< version >>") }}
+<%- else %>
   version: "<< version >>"
+<%- endif %>
   cuda_short: ${{ cuda_compiler_version | replace('.', '') }}
   torch_nodot: ${{ pytorch | replace('.', '') }}
   py_nodot: ${{ python | replace('.', '') }}
@@ -166,10 +175,17 @@ extra:
   prebuilt_wheel_used: false
   # Flat, because that is what tools/verify_conda.py gates on: an artifact
   # whose source_rev is empty or a branch name cannot be rebuilt identically.
+<%- if family %>
+  source_rev: ${{ env.get("CUW_SOURCE_REV", default="<< source_rev >>") }}
+  source:
+    repo: << source_repo | tojson >>
+    commit: ${{ env.get("CUW_SOURCE_REV", default="<< source_rev >>") }}
+<%- else %>
   source_rev: << source_rev | tojson >>
   source:
     repo: << source_repo | tojson >>
     commit: << source_rev | tojson >>
+<%- endif %>
   torch_build: ${{ env.get("CUW_TORCH_BUILD", default="unrecorded") }}
   cuda_compiler_version: ${{ cuda_compiler_version }}
   arch_list: ${{ env.get("CUW_ARCH_LIST", default="<< arch_list >>") }}

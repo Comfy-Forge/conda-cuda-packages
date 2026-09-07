@@ -185,6 +185,49 @@ def _check_carry(cfg: dict, pkg_dir: Path) -> None:
             f"of {sorted(CARRY_VALUES)}.")
 
 
+def _all_source_revs(cfg: dict) -> list:
+    """Every revision this package can be built from, family map included."""
+    revs = []
+    if cfg.get("source_rev"):
+        revs.append(str(cfg["source_rev"]).strip())
+    for entry in (cfg.get("family_versions") or {}).values():
+        if isinstance(entry, dict) and entry.get("source_rev"):
+            revs.append(str(entry["source_rev"]).strip())
+    return revs
+
+
+def _check_family_versions(cfg: dict, pkg_dir: Path) -> None:
+    """`family_versions` maps a TORCH version to this package's own version.
+
+    torchvision and torchaudio version independently of torch (torchvision
+    0.26.0 goes with torch 2.11.0), so a family package cannot state one
+    `version`. The map is derived data -- torchvision's from each release's
+    own `Requires-Dist: torch==X`, torchaudio's from upstream's release
+    convention because it declares no torch dependency at all -- and a wrong
+    entry silently produces an extension whose ABI does not match the torch it
+    will be installed beside. So every entry must be complete and pinned.
+    """
+    fv = cfg.get("family_versions")
+    if fv is None:
+        return
+    if not isinstance(fv, dict) or not fv:
+        raise SystemExit(
+            f"ERROR: {pkg_dir.name}/package.yml: family_versions must be a "
+            f"non-empty mapping of torch version -> {{version, source_rev}}.")
+    for torch_version, entry in fv.items():
+        where = f"{pkg_dir.name}/package.yml: family_versions[{torch_version!r}]"
+        if not isinstance(entry, dict):
+            raise SystemExit(f"ERROR: {where} must be a mapping, got "
+                             f"{type(entry).__name__}.")
+        for field in ("version", "source_rev"):
+            if not str(entry.get(field) or "").strip():
+                raise SystemExit(f"ERROR: {where} is missing {field!r}.")
+        if not re.fullmatch(r"\d+(\.\d+)+", str(torch_version)):
+            raise SystemExit(
+                f"ERROR: {where}: the KEY must be a torch version like "
+                f"'2.11.0'; the package's own version goes in `version`.")
+
+
 def load_package(pkg_dir: Path) -> dict:
     """One package's flat config dict, overrides merged in."""
     cfg = yaml.safe_load((pkg_dir / "package.yml").read_text()) or {}
@@ -207,18 +250,25 @@ def load_package(pkg_dir: Path) -> dict:
                 f"README.md explaining the override -- every deviation from "
                 f"defaults/ must say why (add an '## Overrides' section).")
 
-    for req in ("name", "version", "source_repo", "source_rev", "pypi_name",
-                "import_name"):
+    _check_family_versions(cfg, pkg_dir)
+
+    # A family package (torchvision, torchaudio) has no single version: its
+    # version is a function of the torch it builds against, so the matrix
+    # resolves both from `family_versions` per cell.
+    required = ["name", "source_repo", "pypi_name", "import_name"]
+    if not cfg.get("family_versions"):
+        required += ["version", "source_rev"]
+    for req in required:
         if not str(cfg.get(req) or "").strip():
             raise SystemExit(
                 f"ERROR: {pkg_dir.name}: '{req}' is required in package.yml.")
 
-    rev = str(cfg["source_rev"]).strip()
-    if rev.lower() in ("main", "master", "head"):
-        raise SystemExit(
-            f"ERROR: {pkg_dir.name}: source_rev is a floating ref ({rev!r}) "
-            f"-- pin a tag or commit SHA, or two artifacts of one version "
-            f"need not come from the same source.")
+    for rev in _all_source_revs(cfg):
+        if rev.lower() in ("main", "master", "head"):
+            raise SystemExit(
+                f"ERROR: {pkg_dir.name}: source_rev is a floating ref ({rev!r}) "
+                f"-- pin a tag or commit SHA, or two artifacts of one version "
+                f"need not come from the same source.")
 
     if "links_torch" not in cfg:
         raise SystemExit(
