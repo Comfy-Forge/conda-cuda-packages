@@ -1,0 +1,151 @@
+{#-
+  The single recipe template. `scripts/generate_recipes.py` renders this once
+  per package into `recipes/<name>/recipe.yaml`, which is COMMITTED and
+  drift-checked in CI. Never hand-edit a generated recipe: fix the template
+  or the package's `package.yml`.
+
+  Two things in here are load-bearing and were established by measurement,
+  not by reading docs (step-0 probe, 2026-09):
+
+  1. rattler-build gives the build script a CLEAN environment — the outer
+     shell's exports do NOT reach it. Anything the script needs must be
+     declared in `build.script.env`, and anything that varies per CI run is
+     read there with `${{ env.get(...) }}`, which is evaluated at render
+     time. This is why every CCACHE_* setting is listed below rather than
+     exported by the workflow.
+  2. CUDA dev packages are NOT pinned to an exact minor. Pinning
+     `cuda-cudart-dev 12.8.*` forces `cuda-version >=12.8,<12.9`, which is
+     UNSAT against a pytorch whose `triton` pin is cuda129-only. The window
+     comes from the pytorch we build against; we just live inside it.
+-#}
+context:
+  name: {{ conda_name }}
+  version: "{{ version }}"
+  cuda_short: ${{ cuda_compiler_version | replace('.', '') }}
+  torch_nodot: ${{ pytorch | replace('.', '') }}
+  py_nodot: ${{ python | replace('.', '') }}
+
+package:
+  name: ${{ name }}
+  version: ${{ version }}
+
+source:
+  # Pre-fetched, patched and tarballed OUTSIDE rattler-build by
+  # scripts/fetch_patched_sources.py. Doing it here instead of with a `git:`
+  # source is what lets the build script run with no network at all: there is
+  # nothing left for it to legitimately download.
+  path: ${{ env.get("CUW_SRC_TARBALL", default="../../source.tar.gz") }}
+
+build:
+  number: ${{ env.get("CUW_BUILD_NUMBER", default="0") }}
+  string: cuda${{ cuda_short }}_torch${{ torch_nodot }}_py${{ py_nodot }}_h${{ hash }}_${{ build_number }}
+  script:
+    env:
+      # ---- what the build is ------------------------------------------
+      TORCH_CUDA_ARCH_LIST: {{ arch_list | tojson }}
+      FORCE_CUDA: "1"
+      MAX_JOBS: "{{ jobs }}"
+      CUW_NVCC_THREADS: "{{ nvcc_threads }}"
+{%- if force_source_build %}
+      # ---- L2: force-source flags, declared per package ----------------
+      # Upstream build scripts that will silently download a prebuilt binary
+      # unless told otherwise. Values are the exact strings upstream tests
+      # for; note flash-attn compares against "TRUE", so "1" is a no-op.
+{%- for k, v in force_source_build.items() %}
+      {{ k }}: {{ v | tojson }}
+{%- endfor %}
+{%- endif %}
+      # ---- ccache: config must live HERE, not in the outer shell -------
+      CUW_MODE: ${{ env.get("CUW_MODE", default="full") }}
+      CUW_SHARD_INDEX: ${{ env.get("CUW_SHARD_INDEX", default="0") }}
+      CUW_SHARD_COUNT: ${{ env.get("CUW_SHARD_COUNT", default="0") }}
+      CUW_LEDGER: ${{ env.get("CUW_LEDGER", default="/tmp/cuw/ledger.txt") }}
+      CUW_RSS_LOG: ${{ env.get("CUW_RSS_LOG", default="/tmp/cuw/rss.log") }}
+      CUW_CCACHE_BIN: ${{ env.get("CUW_CCACHE_BIN", default="ccache") }}
+      CCACHE_DIR: ${{ env.get("CUW_CCACHE_DIR", default="/tmp/cuw/ccache") }}
+      # BASEDIR must be an ancestor of both the shard and link work dirs, so
+      # ccache rewrites the differing absolute paths out of the hash.
+      CCACHE_BASEDIR: ${{ env.get("CUW_CCACHE_BASEDIR", default="/tmp") }}
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_COMPILERCHECK: content
+      CCACHE_SLOPPINESS: include_file_ctime,include_file_mtime,time_macros,locale
+      CCACHE_MAXSIZE: "0"
+      # torch >= 2.12 knob: keeps nvcc's dependency generation off the cached
+      # command line. Older torch ignores it; the wrapper writes stub depfiles.
+      TORCH_EXTENSION_SKIP_NVCC_GEN_DEPENDENCIES: "1"
+      CUW_RUN_ID: ${{ env.get("GITHUB_RUN_ID", default="local") }}
+      CUW_RUN_URL: ${{ env.get("CUW_RUN_URL", default="local") }}
+    content:
+      - if: unix
+        then: |
+{{ build_sh | indent(10, true) }}
+      - if: win
+        then: |
+          :: NOT WIRED FOR v1 — linux-64 only (see docs/ARCHITECTURE.md#scope).
+          :: Windows needs the .o-restore handoff, MSVC version pinning, and
+          :: the setuptools spawn-rename breakage handled before this is real.
+          echo "win builds are not wired yet" 1>&2
+          exit 1
+
+requirements:
+  build:
+    - ${{ compiler('c') }}
+    - ${{ compiler('cxx') }}
+    - ${{ stdlib('c') }}
+    - if: linux
+      then: patchelf
+  host:
+    - python ${{ python }}.*
+    - pip
+    - setuptools
+{%- if links_torch %}
+    # The exact torch this compiles against. The build glob is what locks the
+    # CUDA flavour: run_exports cannot express it (it derives from the host
+    # package's VERSION, not its build string), so a bare minor range would
+    # let a cu130 torch satisfy a cu128 extension.
+    - pytorch ${{ pytorch }}.* cuda${{ cuda_short }}_*
+{%- endif %}
+    # Unpinned minor, deliberately — see the header note.
+    - cuda-nvcc
+    - cuda-cudart-dev
+    - cuda-cccl
+{%- for dep in host_deps %}
+    - {{ dep }}
+{%- endfor %}
+  run:
+    - python
+{%- if links_torch %}
+    # Same glob in run:, so an installed extension can never sit beside a
+    # torch of a different flavour.
+    - pytorch ${{ pytorch }}.* cuda${{ cuda_short }}_*
+{%- endif %}
+{%- for dep in run_deps %}
+    - {{ dep }}
+{%- endfor %}
+
+{%- if import_name %}
+
+tests:
+  - python:
+      imports:
+        - {{ import_name }}
+{%- endif %}
+
+about:
+  homepage: {{ homepage | tojson }}
+  license: {{ license | tojson }}
+  summary: {{ summary | tojson }}
+
+extra:
+  # Provenance: the from-source guarantee, recorded in the artifact so it is
+  # auditable by someone who was not watching CI.
+  built_from_source: true
+  prebuilt_wheel_used: false
+  source:
+    repo: {{ source_repo | tojson }}
+    commit: {{ source_rev | tojson }}
+  torch_build: ${{ env.get("CUW_TORCH_BUILD", default="unrecorded") }}
+  cuda_compiler_version: ${{ cuda_compiler_version }}
+  arch_list: {{ arch_list | tojson }}
+  run_id: ${{ env.get("GITHUB_RUN_ID", default="local") }}
+  run_url: ${{ env.get("CUW_RUN_URL", default="local") }}
