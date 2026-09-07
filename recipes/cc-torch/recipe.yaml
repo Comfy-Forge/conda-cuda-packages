@@ -225,13 +225,17 @@ build:
           # pip install . records where it installed FROM in direct_url.json, which is
           # this runner's $SRC_DIR. That path is meaningless to anyone who installs the
           # package and makes `pip freeze` emit a file:// URL instead of a version, so
-          # it must not ship. INSTALLER likewise has to read exactly "conda", with no
-          # trailing newline -- `echo` would add one and tools that compare the whole
-          # file byte-for-byte would then disagree about who owns the package.
+          # it must not ship. RECORD goes for the same reason conda-forge drops it: with
+          # it present, `pip uninstall` will happily delete files conda owns.
+          #
+          # INSTALLER is deliberately NOT written here. rattler-build 0.75.0 rewrites it
+          # during packaging no matter what the build script leaves behind -- measured:
+          # a script that writes exactly "conda" (5 bytes, verified with od at the end
+          # of the script) still produces "conda\n" (6 bytes) inside the .conda. So a
+          # write here would be dead code that looks load-bearing.
           for di in "$SITE"/*.dist-info; do
             [ -d "$di" ] || continue
             rm -f "$di/direct_url.json" "$di/RECORD"
-            printf 'conda' > "$di/INSTALLER"
           done
           if [ -s "$CUW_RSS_LOG" ]; then
             echo "=== nvcc peak RSS per TU (top 10) ==="
