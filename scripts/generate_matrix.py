@@ -189,6 +189,20 @@ def build_string(cfg: dict, cuda: str, torch_version: str, python: str,
     return f"cuda{cu}_torch{tv}_py{py}_{build_number}"
 
 
+def _has_fragment(name: str, version: str, build_string: str, subdir: str) -> bool:
+    """Is this cell already published, i.e. does a repodata fragment exist?
+
+    The fragment filename carries rattler-build's variant hash, which is not
+    known until the recipe is rendered, so the cell can only match by glob:
+    <name>-<version>-cuda128_torch211_py312_*_<n>.conda.json. That is precise
+    enough -- the hash is the only free field, and everything either side of
+    it identifies the cell exactly.
+    """
+    head, _, num = build_string.rpartition("_")
+    meta = Path(__file__).resolve().parent.parent / "meta" / subdir
+    return any(meta.glob(f"{name}-{version}-{head}_*_{num}.conda.json"))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--package", required=True)
@@ -198,6 +212,12 @@ def main() -> int:
     ap.add_argument("--platform", default="all")
     ap.add_argument("--build-number", type=int, default=0)
     ap.add_argument("--cache-dir", type=Path, default=Path("/tmp/conda-cuda-matrix"))
+    ap.add_argument("--skip-published", action="store_true",
+                    help="drop cells that already have a committed repodata "
+                         "fragment. Fragment existence -- not a build log, not "
+                         "a run conclusion -- is what 'done' means for this "
+                         "channel, so a re-dispatch after a partial wave "
+                         "rebuilds only what is actually missing.")
     ap.add_argument("-o", "--output", type=Path)
     args = ap.parse_args()
 
@@ -215,7 +235,7 @@ def main() -> int:
     # ---- family packages: version is a function of the torch built against --
     family = cfg.get("family_versions") or {}
     upstream = None
-    holes = {"no_pairing": set(), "not_published": set()}
+    holes = {"no_pairing": set(), "not_published": set(), "published": set()}
     if family:
         upstream = upstream_cells(cfg["pypi_name"], policy["supported_cudas"],
                                   args.cache_dir)
@@ -274,6 +294,12 @@ def main() -> int:
             if not arch:
                 continue  # a CUDA line absent from the arch table is not built
             shards = int(cfg.get("sharding") or 1)
+            bstr = build_string(cfg, cuda, torch_version, python,
+                                args.build_number)
+            if args.skip_published and _has_fragment(cfg["name"], cell_version,
+                                                     bstr, subdir):
+                holes["published"].add((cell_version, cuda, python))
+                continue
             for shard_index in range(1, shards + 1):
                 jobs.append({
                     "package": cfg["name"],
@@ -302,8 +328,7 @@ def main() -> int:
                     "nvcc_flags": cfg.get("nvcc_flags", ""),
                     "build_subdir": cfg.get("build_subdir", ""),
                     "runner": policy["runners"][subdir],
-                    "build_string": build_string(cfg, cuda, torch_version, python,
-                                                 args.build_number),
+                    "build_string": bstr,
                     "family": bool(family),
                     # A family package has one tarball per version, so the
                     # cell names the one it needs; everything else has one.
@@ -314,6 +339,11 @@ def main() -> int:
             pairs = sorted({t for t, _, _ in holes["no_pairing"]})
             print(f"  {subdir}: HOLE, no {cfg['name']} release pairs with torch "
                   f"{pairs} -- upstream never shipped one", file=sys.stderr)
+        if holes["published"]:
+            done = sorted(holes["published"])
+            print(f"  {subdir}: SKIP {len(done)} cell(s) already published "
+                  f"(fragment exists); re-dispatch builds only the rest",
+                  file=sys.stderr)
         if holes["not_published"]:
             byfl = {}
             for ver, cu, _py in sorted(holes["not_published"]):
