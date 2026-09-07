@@ -220,6 +220,19 @@ build:
             exit 1
           fi
           echo "ledger: $COMPILED compile(s) recorded for $MODULES installed module(s)"
+
+          # ---- dist-info hygiene --------------------------------------------------
+          # pip install . records where it installed FROM in direct_url.json, which is
+          # this runner's $SRC_DIR. That path is meaningless to anyone who installs the
+          # package and makes `pip freeze` emit a file:// URL instead of a version, so
+          # it must not ship. INSTALLER likewise has to read exactly "conda", with no
+          # trailing newline -- `echo` would add one and tools that compare the whole
+          # file byte-for-byte would then disagree about who owns the package.
+          for di in "$SITE"/*.dist-info; do
+            [ -d "$di" ] || continue
+            rm -f "$di/direct_url.json" "$di/RECORD"
+            printf 'conda' > "$di/INSTALLER"
+          done
           if [ -s "$CUW_RSS_LOG" ]; then
             echo "=== nvcc peak RSS per TU (top 10) ==="
             sort -t= -k2 -nr "$CUW_RSS_LOG" | head -10
@@ -286,6 +299,9 @@ extra:
   # auditable by someone who was not watching CI.
   built_from_source: true
   prebuilt_wheel_used: false
+  # Flat, because that is what tools/verify_conda.py gates on: an artifact
+  # whose source_rev is empty or a branch name cannot be rebuilt identically.
+  source_rev: "328dc9836f513d00c4b5bc38fe30478b4435cbb5"
   source:
     repo: "rahul-goel/fused-ssim"
     commit: "328dc9836f513d00c4b5bc38fe30478b4435cbb5"

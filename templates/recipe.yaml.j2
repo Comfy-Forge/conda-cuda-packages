@@ -156,6 +156,9 @@ extra:
   # auditable by someone who was not watching CI.
   built_from_source: true
   prebuilt_wheel_used: false
+  # Flat, because that is what tools/verify_conda.py gates on: an artifact
+  # whose source_rev is empty or a branch name cannot be rebuilt identically.
+  source_rev: << source_rev | tojson >>
   source:
     repo: << source_repo | tojson >>
     commit: << source_rev | tojson >>

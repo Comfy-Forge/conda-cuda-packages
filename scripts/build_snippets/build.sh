@@ -166,6 +166,19 @@ if [ "$MODULES" -gt 0 ] && [ "$COMPILED" -eq 0 ] && [ "$HITS" -eq 0 ]; then
   exit 1
 fi
 echo "ledger: $COMPILED compile(s) recorded for $MODULES installed module(s)"
+
+# ---- dist-info hygiene --------------------------------------------------
+# pip install . records where it installed FROM in direct_url.json, which is
+# this runner's $SRC_DIR. That path is meaningless to anyone who installs the
+# package and makes `pip freeze` emit a file:// URL instead of a version, so
+# it must not ship. INSTALLER likewise has to read exactly "conda", with no
+# trailing newline -- `echo` would add one and tools that compare the whole
+# file byte-for-byte would then disagree about who owns the package.
+for di in "$SITE"/*.dist-info; do
+  [ -d "$di" ] || continue
+  rm -f "$di/direct_url.json" "$di/RECORD"
+  printf 'conda' > "$di/INSTALLER"
+done
 if [ -s "$CUW_RSS_LOG" ]; then
   echo "=== nvcc peak RSS per TU (top 10) ==="
   sort -t= -k2 -nr "$CUW_RSS_LOG" | head -10
