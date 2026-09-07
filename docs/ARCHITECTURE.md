@@ -32,7 +32,7 @@ have done nothing.
 
 | layer | mechanism |
 |---|---|
-| **L1 — no network** | `rattler-build` denies network in the build script by default. This repo never passes `--allow-network`; source is fetched and patched *outside* the sandbox, so no legitimate build needs it. Fetching a prebuilt wheel fails at the syscall, not at review. A lint rejects `--allow-network` anywhere in the repo. |
+| **L1 — no network** | The build script runs with no network, so `pip` cannot reach an upstream wheel because it cannot reach anything; source is fetched and patched *outside*, so no legitimate build needs it. **Correction (measured 2026-09-07):** this is NOT rattler-build's default. `--sandbox` is opt-in, `--allow-network` only means anything once the sandbox is on, and a build script without `--sandbox` was verified to `curl` pypi.org successfully. The sandbox also requires a separate `rattler-sandbox` binary. So the guarantee is: **always pass `--sandbox`, never `--allow-network`**, enforced by `scripts/lint_guarantee.py` (which fails on either regression and is tested against both). Whether the sandbox engages on a GitHub runner is proven by the canary job, not assumed. |
 | **L2 — declared force-source flags** | `package.yml` carries `force_source_build:` for any upstream whose build can download a binary. The loader hard-errors when it is missing or set to a permissive value — the same "too important to leave unstated" pattern as the mandatory `jobs`/`nvcc_threads`. |
 | **L3 — compile ledger** | The compiler wrapper records every translation unit it compiles. A post-build gate refuses any artifact holding an extension module with no matching compile record — catching a binary vendored into the source tree, which L1 cannot see. |
 | **L4 — canary** | `recipes/_canary_prebuilt/` deliberately attempts a wheel fetch. CI fails if it ever succeeds, so L1 cannot regress silently. |
@@ -60,8 +60,22 @@ distinguish a flaky TU from four shards built for the wrong architecture.
 A path-independent cache is also the only handoff medium that can plausibly
 survive `rattler-build` relocating the build, which is why it matters here.
 
-**Whether that survives is the riskiest assumption in this design, and it is
-measured before anything is built on it** (see Staging, step 0).
+**Measured 2026-09-07 — it survives.** A cache populated by one
+`rattler-build` run replayed at zero new misses in a second run in a
+different work dir *and* a different prefix (`cache_miss` 1 → 1,
+`direct_cache_hit` 0 → 1), despite conda activation injecting genuinely
+path-dependent flags (`-fdebug-prefix-map=$SRC_DIR=…`, `-isystem
+$PREFIX/include`); `CCACHE_BASEDIR` + `CCACHE_NOHASHDIR=1` absorb them. No
+fallback needed. Caveat kept honest: the probe used a C translation unit,
+and `-x cu` is precisely where older ccache silently fails, so the result
+deserves re-measuring on real `.cu` TUs at scale rather than inferring.
+
+Two consequences found while proving it: rattler-build hands the build
+script a **clean environment**, so every `CCACHE_*` setting must live in
+`build.script.env` (exporting from the workflow reaches nothing); and CUDA
+`-dev` packages must **not** be pinned to an exact minor — `cuda-cudart-dev
+12.8.*` forces `cuda-version >=12.8,<12.9`, which is UNSAT against a pytorch
+whose triton pin is cuda129-only, the same conflict conda-torch hit.
 
 ## Packaging
 
