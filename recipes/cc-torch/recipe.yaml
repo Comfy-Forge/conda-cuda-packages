@@ -246,7 +246,7 @@ tests:
 
 about:
   homepage: "https://github.com/ronghanghu/cc_torch"
-  license: "UNKNOWN"
+  license: "LicenseRef-Unspecified"
   summary: "cc-torch"
 
 extra:

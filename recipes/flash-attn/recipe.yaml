@@ -252,7 +252,7 @@ tests:
 
 about:
   homepage: "https://github.com/Dao-AILab/flash-attention"
-  license: "UNKNOWN"
+  license: "LicenseRef-Unspecified"
   summary: "flash-attn"
 
 extra:

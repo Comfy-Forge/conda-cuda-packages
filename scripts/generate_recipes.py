@@ -56,6 +56,23 @@ def conda_name(cfg: dict) -> str:
     return cfg.get("conda_name") or (cfg.get("pypi_name") or cfg["name"]).replace("_", "-")
 
 
+def _license(cfg: dict) -> str:
+    """SPDX identifier, or a parseable placeholder plus a loud warning.
+
+    rattler-build validates this against the SPDX list, so a bare "UNKNOWN"
+    fails the build outright. Shipping a real artifact with an unspecified
+    licence is also how conda-torch ended up redistributing NVIDIA binaries
+    with the EULA stripped, so the gap is surfaced rather than papered over.
+    """
+    lic = cfg.get("license")
+    if lic:
+        return lic
+    print(f"WARNING: {cfg['name']}: no `license:` in package.yml -- emitting "
+          f"LicenseRef-Unspecified. Set the real SPDX identifier before this "
+          f"package is published.", file=sys.stderr)
+    return "LicenseRef-Unspecified"
+
+
 def render(folder: str, cfg: dict, env) -> str:
     tmpl = env.get_template(TEMPLATE.name)
     return tmpl.render(
@@ -72,7 +89,7 @@ def render(folder: str, cfg: dict, env) -> str:
         run_deps=cfg.get("run_deps") or [],
         import_name=cfg.get("import_name") or cfg["name"],
         homepage=cfg.get("homepage", f"https://github.com/{cfg.get('source_repo','')}"),
-        license=cfg.get("license", "UNKNOWN"),
+        license=_license(cfg),
         summary=cfg.get("summary", cfg["name"]),
         build_sh=BUILD_SH.read_text().rstrip("\n"),
     ) + "\n"

@@ -129,6 +129,8 @@ jobs:
           rattler-build build --recipe "$RECIPE" \
             --variant-config defaults/variants.yaml \
             --variant cuda_compiler_version="${{ matrix.cell.cuda }}" \
+            --variant pytorch="${{ matrix.cell.pytorch }}" \
+            --variant python="${{ matrix.cell.python }}" \
             --target-platform "${{ matrix.cell.platform }}" \
             --output-dir "$RUNNER_TEMP/out" --test skip --no-build-id \
             -c https://comfy-forge.github.io/conda-torch -c conda-forge
@@ -192,6 +194,8 @@ jobs:
           rattler-build build --recipe "$RECIPE" \
             --variant-config defaults/variants.yaml \
             --variant cuda_compiler_version="${{ matrix.cell.cuda }}" \
+            --variant pytorch="${{ matrix.cell.pytorch }}" \
+            --variant python="${{ matrix.cell.python }}" \
             --target-platform "${{ matrix.cell.platform }}" \
             --output-dir "$RUNNER_TEMP/out" --test skip --no-build-id \
             -c https://comfy-forge.github.io/conda-torch -c conda-forge
@@ -212,22 +216,33 @@ jobs:
           path: ${{ runner.temp }}/out/*/*.conda
 
   canary:
-    # L4. Asserts the build sandbox still denies network. If this job's build
-    # SUCCEEDS, the from-source guarantee has regressed for every package.
+    # L4. Proves the no-network guarantee is in force, POSITIVELY.
+    #
+    # The first version inferred "network denied" from the canary build
+    # FAILING. That passes whenever the mechanism is broken, and it did
+    # exactly that on run 34095721769: it reported the guarantee in force
+    # while the real cause was rattler-sandbox failing to start. So the
+    # canary now has to SUCCEED and print a proof line, which means any
+    # failure — including infrastructure failure — fails this job.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/setup-conda-build
         with:
           swapfile-gb: "0"
-      - name: Canary must fail
+      - name: Canary must SUCCEED and prove the guarantee
         run: |
           set -uo pipefail
-          if rattler-build build --recipe recipes/_canary_prebuilt/recipe.yaml \
+          rattler-build build --recipe recipes/_canary_prebuilt/recipe.yaml \
                --output-dir "$RUNNER_TEMP/canary" --test skip --no-build-id \
-               -c conda-forge; then
-            echo "::error::CANARY BUILD SUCCEEDED — the build sandbox is not denying network."
-            echo "::error::Every from-source guarantee in this repo is void until that is fixed."
+               -c conda-forge 2>&1 | tee "$RUNNER_TEMP/canary.log"
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::canary build FAILED (exit $rc). Either the no-network guard is broken, or it is too coarse and broke an ordinary build."
             exit 1
           fi
-          echo "canary failed as required: network is denied inside the build"
+          if ! grep -q 'CANARY_RESULT=GUARANTEE_IN_FORCE' "$RUNNER_TEMP/canary.log"; then
+            echo "::error::canary build succeeded but never printed its proof line -- the assertions did not run."
+            exit 1
+          fi
+          echo "canary: guarantee proven in force (AF_INET refused, fetch refused, AF_UNIX intact)"

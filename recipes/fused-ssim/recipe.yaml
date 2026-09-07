@@ -246,7 +246,7 @@ tests:
 
 about:
   homepage: "https://github.com/rahul-goel/fused-ssim"
-  license: "UNKNOWN"
+  license: "LicenseRef-Unspecified"
   summary: "fused-ssim"
 
 extra:
