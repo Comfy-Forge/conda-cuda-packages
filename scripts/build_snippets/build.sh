@@ -82,6 +82,12 @@ echo "================================================================="
 # mode it is a pure ccache pass-through and every compile should hit.
 if [ "$CUW_MODE" = "shard" ]; then
   export CUW_PARTITION=1
+  # The matrix numbers shards from 1 ("shard 1/1"), the partition arithmetic
+  # is 0-based. Without this conversion the comparison never matches, the
+  # wrapper stubs out EVERY translation unit, and the build still succeeds --
+  # shipping a package whose extension module is an empty object. Observed
+  # exactly that; only the compile ledger caught it.
+  export CUW_SHARD_INDEX0=$(( ${CUW_SHARD_INDEX:-1} - 1 ))
 fi
 
 "$CCACHE_BIN" -z >/dev/null 2>&1 || true
@@ -116,7 +122,13 @@ case "$CUW_MODE" in
     # be empty), but a shard whose wrapper never ran at all is a real defect:
     # it would ship an empty cache and the link job would recompile the world.
     if [ "$((HITS + MISSES))" -eq 0 ]; then
-      echo "::error::shard saw zero ccache lookups -- the wrapper never occupied the nvcc seat" >&2
+      echo "::error::shard saw zero ccache lookups -- the wrapper never occupied the nvcc seat, or it stubbed out every translation unit (check CUW_SHARD_INDEX0 against CUW_SHARD_COUNT)" >&2
+      exit 1
+    fi
+    if [ "$COMPILED" -eq 0 ] && [ "$CUW_SHARD_COUNT" -eq 1 ]; then
+      # With a single shard there is no slice to be empty: compiling nothing
+      # means the partition logic is wrong, not that this shard had no work.
+      echo "::error::single-shard build compiled 0 translation units -- the partition stubbed everything out" >&2
       exit 1
     fi
     echo "shard $CUW_SHARD_INDEX done; cache populated. Exiting before install."

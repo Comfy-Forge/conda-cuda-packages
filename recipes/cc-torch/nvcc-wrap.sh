@@ -41,7 +41,8 @@ if [ -n "$src" ] && [ -n "$out" ] && [ "${CUW_PARTITION:-0}" = "1" ] && [ "${CUW
   rp=$(readlink -f "$src" 2>/dev/null || printf %s "$src")
   h=$(printf %s "$rp" | md5sum | cut -c1-8)
   mine=$(( 0x$h % CUW_SHARD_COUNT ))
-  if [ "$mine" -ne "${CUW_SHARD_INDEX:-0}" ]; then
+  # CUW_SHARD_INDEX0 is 0-based; CUW_SHARD_INDEX from the matrix is 1-based.
+  if [ "$mine" -ne "${CUW_SHARD_INDEX0:-0}" ]; then
     # Not my slice: emit a valid empty object so the build system proceeds.
     : > "$out.empty.c"
     "${CUW_REAL_NVCC%nvcc.real}"../bin/cc -x c -c "$out.empty.c" -o "$out" 2>/dev/null \
