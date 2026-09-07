@@ -106,6 +106,17 @@ carry: complete
 
 verify:
   import: torchvision
+  # Fail closed on the silent-codec trap. Detection failing is not a build
+  # failure upstream -- it warns, ships an image extension without the codec,
+  # and leaves the run_export on the package claiming otherwise -- so the only
+  # thing that catches it is asserting the binary's DT_NEEDED. Prefixes, not
+  # full sonames: libjpeg.so.8 today is not libjpeg.so.9 tomorrow, and this
+  # has to hold across 16 torch pairings.
+  expect_linked:
+    - libjpeg
+    - libpng
+    - libwebp
+    - libnvjpeg
   # Three things at once: a CUDA kernel (nms) so a mis-arch'd build fails
   # with cudaErrorNoKernelImageForDevice rather than passing a bare import,
   # and both codec paths, which are what compiling was for.

@@ -85,6 +85,26 @@ def elf_dynamic(data: bytes, tmp: Path, name: str):
                           text=True).stdout
 
 
+def _expect_linked(pkg_name: str) -> list:
+    """`verify.expect_linked` from the package's own package.yml, if present.
+
+    Read from packages/ rather than passed on the command line so the
+    expectation lives beside the host_deps that are supposed to satisfy it,
+    and so no caller can forget to pass it.
+    """
+    if not pkg_name:
+        return []
+    cfg = Path(__file__).resolve().parent.parent / "packages" / pkg_name / "package.yml"
+    if not cfg.is_file():
+        return []
+    try:
+        import yaml
+    except ImportError:
+        return []
+    data = yaml.safe_load(cfg.read_text()) or {}
+    return list((data.get("verify") or {}).get("expect_linked") or [])
+
+
 def verify(path: Path, ledger: set, expect_arch: str, tmp: Path) -> bool:
     rep = Report(path.name)
     print(f"\n=== {path.name} ===")
@@ -197,6 +217,34 @@ def verify(path: Path, ledger: set, expect_arch: str, tmp: Path) -> bool:
     rep.check(not bad_rpath,
               f"RPATH lint clean over {checked} ELFs "
               f"(absolute or empty entries: {bad_rpath[:2]})")
+
+    # ---- declared linkage must be REAL --------------------------------------
+    # A codec that fails to be detected does not fail the build: torchvision
+    # prints a warning, ships an image extension linking libpng alone, still
+    # imports, and still carries libjpeg-turbo/libwebp/libnvjpeg in `depends`
+    # via run_exports -- so the metadata claims codecs the binary does not
+    # have and decode_jpeg raises only on the user's machine. conda-forge hit
+    # the same trap and patched setup.py to raise instead of warn
+    # (torchvision-feedstock, 0002-Force-nvjpeg-and-force-failure.patch).
+    # Asserting the DT_NEEDED here is the same fail-closed idea one level out:
+    # it needs no patch per upstream version, and unlike the GPU verify op it
+    # runs on a CI box with no GPU, which is where the fan-out happens.
+    expect_linked = _expect_linked(index.get("name", ""))
+    if expect_linked and exts:
+        needed = set()
+        for mem in ptf.getmembers():
+            if not mem.isfile() or not re.search(r"\.(so|so\.\d+|pyd)$", mem.name):
+                continue
+            dyn = elf_dynamic(ptf.extractfile(mem).read(), tmp, mem.name)
+            for line in (dyn or "").splitlines():
+                m2 = re.search(r"Shared library: \[([^\]]+)\]", line)
+                if m2:
+                    needed.add(m2.group(1))
+        missing = [w for w in expect_linked
+                   if not any(n.startswith(w) for n in needed)]
+        rep.check(not missing,
+                  f"links every library package.yml says it must "
+                  f"(missing {missing}; NEEDED={sorted(needed)[:8]})")
 
     # ---- provenance: the from-source guarantee, recorded --------------------
     extra = about.get("extra") or {}
