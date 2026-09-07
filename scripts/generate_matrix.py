@@ -293,6 +293,8 @@ def main() -> int:
             arch = arch_list_for(cfg, arch_policy, cuda, torch_version, subdir)
             if not arch:
                 continue  # a CUDA line absent from the arch table is not built
+            gcc = (policy.get("host_gcc", {}).get("by_cuda", {}).get(cuda)
+                   or policy.get("host_gcc", {}).get("default", "13"))
             shards = int(cfg.get("sharding") or 1)
             bstr = build_string(cfg, cuda, torch_version, python,
                                 args.build_number)
@@ -328,6 +330,10 @@ def main() -> int:
                     "nvcc_flags": cfg.get("nvcc_flags", ""),
                     "build_subdir": cfg.get("build_subdir", ""),
                     "runner": policy["runners"][subdir],
+                    # The host compiler nvcc will accept, per CUDA line. Sent
+                    # as a variant rather than pinned in variants.yaml
+                    # because it is a property of the CELL, not of the repo.
+                    "gcc_version": gcc,
                     "build_string": bstr,
                     "family": bool(family),
                     # A family package has one tarball per version, so the

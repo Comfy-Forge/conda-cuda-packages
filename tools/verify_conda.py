@@ -150,8 +150,9 @@ def verify(path: Path, ledger: set, expect_arch: str, tmp: Path) -> bool:
                       for d in torch_dep)
         rep.check(glob_ok,
                   f"pytorch dep carries the cuda{m.group('cu')}_* build glob "
-                  f"(got {torch_dep!r}) -- run_exports cannot express flavour, "
-                  f"so without this a cu{m.group('cu')} build can pair with another flavour")
+                  f"(got {torch_dep!r}) -- the torch we build against exports a "
+                  f"flavour-blind run_export, so without this a "
+                  f"cu{m.group('cu')} build can pair with another flavour")
 
     # ---- interpreter ABI ----------------------------------------------------
     # A build string claiming py312 must carry a matching python_abi run dep.

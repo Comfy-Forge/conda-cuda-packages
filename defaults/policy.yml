@@ -15,6 +15,31 @@
 # conda-forge ships the matching cuda-*-dev host packages for it.
 supported_cudas: ["12.4", "12.6", "12.8", "12.9", "13.0", "13.2"]
 
+# nvcc refuses a host compiler newer than its supported ceiling, and the
+# ceiling MOVES with the CUDA line. Derived from conda-forge's own
+# cuda-nvcc-tools constrains (linux-64 repodata, read 2026-09-07):
+#
+#   12.0 - 12.4   gcc_impl_linux-64 >=6,<13        -> gcc 12
+#   12.6          gcc_impl_linux-64 >=6,<14.0a0    -> gcc 13
+#   12.8 - 12.9   gcc_impl_linux-64 >=6,<15.0a0    -> gcc 13
+#   13.0 - 13.3   gcc_impl_linux-64 >=6,<16.0a0    -> gcc 13
+#
+# variants.yaml pinned a single "13" for every cell, with a comment claiming
+# it was inside every CUDA window we target. It is not: cu12.4 wants < 13,
+# and the whole cu12.4 wave died on
+#   "cuda-nvcc-tools 12.4.131 would constrain gcc_impl_linux-64 >=6,<13".
+# It only ever passed because the toolkit was unpinned and the solver quietly
+# built cu12.4 cells with CUDA 12.9 -- the same mislabel that made torchaudio
+# refuse to load. Fixing the pin is what made the incompatibility visible.
+host_gcc:
+  default: "13"
+  by_cuda:
+    "12.0": "12"
+    "12.1": "12"
+    "12.2": "12"
+    "12.3": "12"
+    "12.4": "12"
+
 # Python floor is ours (dropping an old python is a decision). There is no
 # ceiling on purpose: whatever pythons conda-torch actually carries is what
 # we build for.

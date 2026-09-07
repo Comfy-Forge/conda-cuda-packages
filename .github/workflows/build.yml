@@ -168,6 +168,8 @@ jobs:
             --variant cuda_compiler_version="${{ matrix.cell.cuda }}" \
             --variant pytorch="${{ matrix.cell.pytorch }}" \
             --variant python="${{ matrix.cell.python }}" \
+            --variant c_compiler_version="${{ matrix.cell.gcc_version }}" \
+            --variant cxx_compiler_version="${{ matrix.cell.gcc_version }}" \
             --target-platform "${{ matrix.cell.platform }}" \
             --output-dir "$RUNNER_TEMP/out" --test skip --no-build-id \
             -c https://comfy-forge.github.io/conda-torch -c conda-forge
@@ -248,6 +250,8 @@ jobs:
             --variant cuda_compiler_version="${{ matrix.cell.cuda }}" \
             --variant pytorch="${{ matrix.cell.pytorch }}" \
             --variant python="${{ matrix.cell.python }}" \
+            --variant c_compiler_version="${{ matrix.cell.gcc_version }}" \
+            --variant cxx_compiler_version="${{ matrix.cell.gcc_version }}" \
             --target-platform "${{ matrix.cell.platform }}" \
             --output-dir "$RUNNER_TEMP/out" --test skip --no-build-id \
             -c https://comfy-forge.github.io/conda-torch -c conda-forge

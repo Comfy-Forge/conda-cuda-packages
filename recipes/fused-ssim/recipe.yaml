@@ -382,9 +382,24 @@ requirements:
     - pip
     - setuptools
     # The exact torch this compiles against. The build glob is what locks the
-    # CUDA flavour: run_exports cannot express it (it derives from the host
-    # package's VERSION, not its build string), so a bare minor range would
-    # let a cu130 torch satisfy a cu128 extension.
+    # CUDA flavour today: a bare minor range would let a cu130 torch satisfy a
+    # cu128 extension.
+    #
+    # An earlier comment here claimed run_exports STRUCTURALLY cannot express
+    # a flavour. That is wrong, and worth correcting rather than deleting: it
+    # is only `pin_subpackage()` that offers version-range or exact-hash and
+    # nothing in between. A run_export is a MatchSpec string, so a producer
+    # can concatenate a build glob onto it, and conda-forge does exactly that
+    # -- see exchcxx-feedstock, whose run_exports is
+    #   {{ pin_subpackage(name, max_pin='x.x') }} cuda{{ ... }}_*
+    # and ~152 conda-forge packages ship a build-carrying three-part spec.
+    #
+    # The reason we still write the glob by hand is narrower and real:
+    # conda-torch's repacked pytorch exports a flavour-BLIND
+    # `pytorch >=2.x,<2.y` today. If it exported the flavour instead, every
+    # recipe here could drop this line and inherit the lock transitively.
+    # That is a one-line change in the producer replacing N in the consumers,
+    # and it belongs in conda-torch, not here.
     - pytorch ${{ pytorch }}.* cuda${{ cuda_short }}_*
     # torch's OWN headers include these, so every torch-linked extension needs
     # them regardless of what its sources reference: ATen/cuda/CUDAContextLight.h
