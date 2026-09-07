@@ -119,9 +119,13 @@ jobs:
           CUW_ARCH_LIST: ${{ matrix.cell.arch_list }}
           CUW_BUILD_NUMBER: ${{ inputs.build_number }}
           CUW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          RECIPE: recipes/${{ matrix.cell.conda_name }}/recipe.yaml
+          RECIPE: recipes/${{ matrix.cell.package }}/recipe.yaml
         run: |
           set -euo pipefail
+          if [ ! -f "$RECIPE" ]; then
+            echo "::error::recipe $RECIPE does not exist. The matrix cell names a package with no generated recipe -- run scripts/generate_recipes.py and commit, or check the matrix/recipe naming agree."
+            exit 1
+          fi
           # No --sandbox: it needs unprivileged namespaces, which hosted
           # runners do not provide ("sandboxing failure: Operation not
           # permitted", run 34095721769). The no-network guarantee is imposed
@@ -188,9 +192,13 @@ jobs:
           CUW_ARCH_LIST: ${{ matrix.cell.arch_list }}
           CUW_BUILD_NUMBER: ${{ inputs.build_number }}
           CUW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          RECIPE: recipes/${{ matrix.cell.conda_name }}/recipe.yaml
+          RECIPE: recipes/${{ matrix.cell.package }}/recipe.yaml
         run: |
           set -euo pipefail
+          if [ ! -f "$RECIPE" ]; then
+            echo "::error::recipe $RECIPE does not exist. The matrix cell names a package with no generated recipe -- run scripts/generate_recipes.py and commit, or check the matrix/recipe naming agree."
+            exit 1
+          fi
           rattler-build build --recipe "$RECIPE" \
             --variant-config defaults/variants.yaml \
             --variant cuda_compiler_version="${{ matrix.cell.cuda }}" \
