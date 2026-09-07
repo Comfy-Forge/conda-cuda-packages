@@ -104,6 +104,12 @@ requirements:
     - ${{ compiler('c') }}
     - ${{ compiler('cxx') }}
     - ${{ stdlib('c') }}
+    # Without ninja, torch's BuildExtension prints "could not find ninja..
+    # Falling back to using the slow distutils backend" and compiles every
+    # translation unit SERIALLY, ignoring MAX_JOBS entirely -- measured at 12
+    # minutes for one torchvision cell. build.sh already exports PYTORCH_NVCC
+    # for ninja's benefit, so its absence here was an oversight, not a choice.
+    - ninja
     - if: linux
       then: patchelf
   host:
@@ -146,6 +152,14 @@ requirements:
 <%- endfor %>
   run:
     - python
+    # Every package here ships compiled CUDA kernels, so it states that about
+    # itself rather than leaving it to be inferred. Solving is unaffected --
+    # the requirement already arrives transitively through libtorch -- but a
+    # consumer asking "does this need a GPU?" (comfy-test's accelerator lint,
+    # which runs on a bare checkout with no environment built) can then read
+    # one line of this package's own metadata instead of walking its
+    # dependency closure to find where __cuda enters.
+    - __cuda
 <%- if links_torch %>
     # Same glob in run:, so an installed extension can never sit beside a
     # torch of a different flavour.

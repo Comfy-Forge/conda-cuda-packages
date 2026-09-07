@@ -147,6 +147,14 @@ def verify(path: Path, ledger: set, expect_arch: str, tmp: Path) -> bool:
         rep.check(any(d.split()[1].startswith(want) for d in abi if len(d.split()) >= 2),
                   f"python_abi pins {want} to match the build string (got {abi!r})")
 
+    # ---- states its own GPU requirement -------------------------------------
+    # Inheriting __cuda through libtorch is enough for the solver, but a
+    # consumer that wants to know whether a package needs a GPU should not have
+    # to walk a dependency closure to find out -- comfy-test's accelerator lint
+    # asks exactly this, on a bare checkout with nothing installed.
+    rep.check(any(d.split(" ", 1)[0] == "__cuda" for d in depends),
+              "declares __cuda directly (GPU requirement readable without a closure walk)")
+
     # ---- no vendored torch --------------------------------------------------
     vendored_torch = [n for n in payload
                       if re.search(r"(^|/)(lib)?torch(_cpu|_cuda|_python)?\.(so|dll)", n)]

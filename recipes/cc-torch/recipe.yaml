@@ -83,6 +83,34 @@ build:
             exit 1
           fi
 
+          # ---- $PREFIX must look untouched by the time rattler-build packages -----
+          # rattler-build ships "files that appeared in $PREFIX during the build". The
+          # nvcc seat swap below leaves `bin/nvcc.real` behind and the CUDA header
+          # bridge further down creates symlinks under `include/`; both are new paths in
+          # $PREFIX, so both get PACKAGED. Measured, not theorised: the first
+          # torchvision pilot shipped a 27.5 MB `bin/nvcc.real` -- the real CUDA
+          # compiler -- fully declared in paths.json, and every package this repo has
+          # ever built carries the same passenger.
+          #
+          # So everything this script creates inside $PREFIX is recorded here and undone
+          # on EXIT, on every path out: shard mode exits 0 early, a failed compile exits
+          # non-zero, and both must still leave a clean prefix behind.
+          CUW_PREFIX_TRACK="$CUW_DIR/prefix-added.txt"
+          : > "$CUW_PREFIX_TRACK"
+          cuw_restore_prefix() {
+            rc=$?
+            # Put the real compiler back in its seat. Guarded on the marker so this
+            # cannot clobber a real nvcc if the swap never happened.
+            if [ -e "$PREFIX/bin/nvcc.real" ] && grep -q 'CUW_WRAPPER_MARKER' "$PREFIX/bin/nvcc" 2>/dev/null; then
+              mv -f "$PREFIX/bin/nvcc.real" "$PREFIX/bin/nvcc" || true
+            fi
+            while IFS= read -r added; do
+              [ -n "$added" ] && rm -f "$added" || true
+            done < "$CUW_PREFIX_TRACK"
+            return $rc
+          }
+          trap cuw_restore_prefix EXIT
+
           # ---- the wrapper goes in the nvcc SEAT, not on PATH ---------------------
           # torch's cpp_extension invokes "$CUDA_HOME/bin/nvcc" by absolute path, so a
           # PATH-based shim is simply never consulted. Move the real binary aside and
@@ -120,6 +148,40 @@ build:
           export CUDACXX="$PREFIX/bin/nvcc"        # cmake honours this
           # Trailing, so it beats any --threads a setup.py hardcodes earlier in the line.
           export NVCC_APPEND_FLAGS="${NVCC_APPEND_FLAGS:-} --threads ${CUW_NVCC_THREADS:-1}"
+
+          # ---- CUDA headers: bridge conda-forge's targets/ layout -----------------
+          # conda-forge's CUDA 12 packages install headers under
+          # $PREFIX/targets/<arch>/include, NOT $PREFIX/include. Anything that merely
+          # COMPILES is fine, because the activation scripts add the -I. Anything that
+          # PROBES for a header by path is not: it concludes the library is absent.
+          # torchvision does exactly that for nvjpeg (it stats
+          # "$CUDA_HOME/include/nvjpeg.h") and built without GPU JPEG support while
+          # libnvjpeg-dev sat installed in host: and its run_export was already on the
+          # finished package -- which is what rattler-build's "Overdepending against
+          # libnvjpeg" warning was really saying. Link the missing headers in for the
+          # duration of the build; the EXIT trap takes them out again.
+          for cuw_inc in "$PREFIX"/targets/*/include; do
+            [ -d "$cuw_inc" ] || continue
+            mkdir -p "$PREFIX/include"
+            cuw_linked=0
+            for cuw_h in "$cuw_inc"/*; do
+              cuw_b="$(basename "$cuw_h")"
+              # -e is false for a dangling symlink, so test -L as well: without it the
+              # ln below fails on an existing-but-broken link and the loop is noisy.
+              if [ -e "$PREFIX/include/$cuw_b" ] || [ -L "$PREFIX/include/$cuw_b" ]; then continue; fi
+              ln -s "$cuw_h" "$PREFIX/include/$cuw_b" || continue
+              echo "$PREFIX/include/$cuw_b" >> "$CUW_PREFIX_TRACK"
+              cuw_linked=$((cuw_linked + 1))
+            done
+            echo "cuda header bridge: linked $cuw_linked entr(ies) from ${cuw_inc#$PREFIX/} into \$CUDA_HOME/include"
+          done
+
+          # ---- package-declared build environment (package.yml `build_env`) -------
+          # Values computed from $PREFIX cannot live in the recipe's build.script.env:
+          # rattler-build sets those LITERALLY, with no shell expansion, so a
+          # "$PREFIX/include" written there arrives at setup.py as those exact 15
+          # characters. They are rendered here instead, where $PREFIX is real.
+          # (none declared)
 
           echo "=== cuw build ==================================================="
           echo "  mode        : ${CUW_MODE}"
@@ -254,6 +316,12 @@ requirements:
     - ${{ compiler('c') }}
     - ${{ compiler('cxx') }}
     - ${{ stdlib('c') }}
+    # Without ninja, torch's BuildExtension prints "could not find ninja..
+    # Falling back to using the slow distutils backend" and compiles every
+    # translation unit SERIALLY, ignoring MAX_JOBS entirely -- measured at 12
+    # minutes for one torchvision cell. build.sh already exports PYTORCH_NVCC
+    # for ninja's benefit, so its absence here was an oversight, not a choice.
+    - ninja
     - if: linux
       then: patchelf
   host:
@@ -292,6 +360,14 @@ requirements:
     - cuda-cudart-dev
   run:
     - python
+    # Every package here ships compiled CUDA kernels, so it states that about
+    # itself rather than leaving it to be inferred. Solving is unaffected --
+    # the requirement already arrives transitively through libtorch -- but a
+    # consumer asking "does this need a GPU?" (comfy-test's accelerator lint,
+    # which runs on a bare checkout with no environment built) can then read
+    # one line of this package's own metadata instead of walking its
+    # dependency closure to find where __cuda enters.
+    - __cuda
     # Same glob in run:, so an installed extension can never sit beside a
     # torch of a different flavour.
     - pytorch ${{ pytorch }}.* cuda${{ cuda_short }}_*
