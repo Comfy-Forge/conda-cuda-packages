@@ -122,14 +122,15 @@ jobs:
           RECIPE: recipes/${{ matrix.cell.conda_name }}/recipe.yaml
         run: |
           set -euo pipefail
-          # --sandbox is NOT the default (measured): without it the build script
-          # has full network access and --allow-network is meaningless. It is
-          # the mechanism the from-source guarantee rests on, so it is passed
-          # explicitly, and --allow-network is never passed anywhere in this repo.
+          # No --sandbox: it needs unprivileged namespaces, which hosted
+          # runners do not provide ("sandboxing failure: Operation not
+          # permitted", run 34095721769). The no-network guarantee is imposed
+          # inside the build by scripts/build_snippets/nonet.py instead.
           rattler-build build --recipe "$RECIPE" \
             --variant-config defaults/variants.yaml \
+            --variant cuda_compiler_version="${{ matrix.cell.cuda }}" \
             --target-platform "${{ matrix.cell.platform }}" \
-            --output-dir "$RUNNER_TEMP/out" --test skip --no-build-id --sandbox \
+            --output-dir "$RUNNER_TEMP/out" --test skip --no-build-id \
             -c https://comfy-forge.github.io/conda-torch -c conda-forge
       - name: Package shard cache
         run: tar -czf "$RUNNER_TEMP/ccache.tar.gz" -C "$CUW_CCACHE_DIR" .
@@ -190,8 +191,9 @@ jobs:
           set -euo pipefail
           rattler-build build --recipe "$RECIPE" \
             --variant-config defaults/variants.yaml \
+            --variant cuda_compiler_version="${{ matrix.cell.cuda }}" \
             --target-platform "${{ matrix.cell.platform }}" \
-            --output-dir "$RUNNER_TEMP/out" --test skip --no-build-id --sandbox \
+            --output-dir "$RUNNER_TEMP/out" --test skip --no-build-id \
             -c https://comfy-forge.github.io/conda-torch -c conda-forge
       - name: Verify artifact
         run: |
@@ -222,7 +224,7 @@ jobs:
         run: |
           set -uo pipefail
           if rattler-build build --recipe recipes/_canary_prebuilt/recipe.yaml \
-               --output-dir "$RUNNER_TEMP/canary" --test skip --no-build-id --sandbox \
+               --output-dir "$RUNNER_TEMP/canary" --test skip --no-build-id \
                -c conda-forge; then
             echo "::error::CANARY BUILD SUCCEEDED — the build sandbox is not denying network."
             echo "::error::Every from-source guarantee in this repo is void until that is fixed."

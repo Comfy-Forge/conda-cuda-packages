@@ -24,6 +24,7 @@ REPO = Path(__file__).resolve().parent.parent
 TEMPLATE = REPO / "templates" / "recipe.yaml.j2"
 BUILD_SH = REPO / "scripts" / "build_snippets" / "build.sh"
 NVCC_WRAP = REPO / "scripts" / "build_snippets" / "nvcc-wrap.sh"
+NONET = REPO / "scripts" / "build_snippets" / "nonet.py"
 
 
 def load_packages(only: str | None) -> list[tuple[str, dict]]:
@@ -118,6 +119,10 @@ def main() -> int:
         # resolves inside the build sandbox, where scripts/ is not present.
         (out.parent / "nvcc-wrap.sh").write_text(NVCC_WRAP.read_text())
         (out.parent / "nvcc-wrap.sh").chmod(0o755)
+        # nonet.py must sit beside the recipe too: $RECIPE_DIR is the only
+        # path the build script can rely on inside the build.
+        (out.parent / "nonet.py").write_text(NONET.read_text())
+        (out.parent / "nonet.py").chmod(0o755)
         print(out.relative_to(REPO))
 
     if stale:

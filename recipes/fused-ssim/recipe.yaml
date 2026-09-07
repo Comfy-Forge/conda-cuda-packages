@@ -140,8 +140,15 @@ build:
 
           "$CCACHE_BIN" -z >/dev/null 2>&1 || true
 
+          # The compile runs with network access permanently removed. This is the
+          # from-source guarantee (L1), and it is imposed here rather than by
+          # rattler-build's --sandbox because that flag needs unprivileged namespaces,
+          # which are unavailable both in this project's container and on
+          # GitHub-hosted runners (measured: "sandboxing failure: Operation not
+          # permitted"). The seccomp filter needs no privileges, is inherited by every
+          # child (setup.py, pip, cmake, nvcc), and cannot be removed once installed.
           BUILD_RC=0
-          $PYTHON -m pip install . --no-deps --no-build-isolation -vv || BUILD_RC=$?
+          $PYTHON "$RECIPE_DIR/nonet.py" -- $PYTHON -m pip install . --no-deps --no-build-isolation -vv || BUILD_RC=$?
 
           STATS="$("$CCACHE_BIN" --print-stats 2>/dev/null || true)"
           HITS=$(printf '%s\n' "$STATS" | awk -F'\t' '$1 ~ /^(direct_cache_hit|preprocessed_cache_hit)$/ {n+=$2} END{print n+0}')

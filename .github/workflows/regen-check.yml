@@ -31,9 +31,10 @@ jobs:
         run: python scripts/generate_recipes.py --check
 
   guarantee-lint:
-    # The from-source guarantee has exactly two silent failure modes: a
-    # --allow-network appearing, or a --sandbox disappearing. Both leave CI
-    # green. scripts/lint_guarantee.py parses the actual invocations.
+    # The from-source guarantee's silent failure modes: --allow-network
+    # appearing, the compile no longer running under nonet.py, the guard
+    # being made to fail open, or a recipe hand-edited to drop it. All leave
+    # CI green, so they are asserted explicitly.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

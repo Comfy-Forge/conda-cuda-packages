@@ -1,56 +1,77 @@
 # L4 — the negative canary.
 #
-# This recipe deliberately tries to fetch a prebuilt wheel from the network.
-# CI builds it and asserts the build FAILS. If it ever succeeds, the network
-# denial that L1 rests on has regressed — someone added --allow-network, or
-# dropped --sandbox, or the sandbox silently stopped engaging — and every
-# other package's from-source guarantee is void without any of them failing.
+# This asserts the no-network guarantee is actually in force. Read the exit
+# convention carefully, because the obvious version of this test is wrong:
 #
-# It is deliberately NOT generated from a package.yml: it must not change when
-# the template changes, or it stops being an independent check.
+#   The FIRST version inferred "network denied" from the build FAILING. That
+#   passes when the mechanism is broken — and it did exactly that on run
+#   34095721769, reporting "network is denied inside the build" when the real
+#   cause was rattler-sandbox failing to start. A canary that goes green when
+#   the thing it tests is broken is worse than no canary at all.
 #
-# Expected result: `rattler-build build` exits non-zero, and the log shows the
-# fetch failing rather than the wheel arriving.
+# So this build SUCCEEDS when the guarantee holds. It proves three things
+# positively, and any other outcome — including any infrastructure failure —
+# fails the job:
+#
+#   1. the guard is installed (an AF_INET socket raises PermissionError);
+#   2. a real fetch is attempted and refused;
+#   3. AF_UNIX still works, so the guard is narrow enough not to break builds.
 
 package:
   name: canary-prebuilt
-  version: "0.0.1"
+  version: "0.0.2"
+
+source:
+  path: ../../scripts/build_snippets
 
 build:
   number: 0
   script:
     content: |
-      set -x
-      echo "canary: attempting a prebuilt-wheel fetch; this MUST fail"
+      set -euo pipefail
+      echo "canary: verifying the no-network guarantee is in force"
 
-      # Two shapes of the real thing: a direct release-asset download (what
-      # flash-attn's setup.py does), and pip reaching an index.
-      FETCHED=0
-      if curl -fsS --max-time 25 -o /tmp/canary.whl \
-          https://files.pythonhosted.org/packages/py3/t/tiny/tiny-0.0.0-py3-none-any.whl 2>/dev/null; then
-        FETCHED=1
-      fi
-      if $PYTHON -m pip download --no-deps --dest /tmp/canary_dl certifi 2>/dev/null; then
-        FETCHED=1
-      fi
+      # Everything below runs UNDER the guard, exactly as a real build's
+      # compile step does.
+      $PYTHON ./nonet.py -- $PYTHON - <<'PY'
+      import socket, subprocess, sys
 
-      if [ "$FETCHED" = "1" ]; then
-        echo "::error::CANARY REACHED THE NETWORK — the from-source guarantee (L1) is not in effect."
-        echo "::error::Check that the build runs with --sandbox and WITHOUT --allow-network."
-        exit 1
-      fi
+      # 1. the guard must be installed
+      try:
+          socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+      except PermissionError:
+          print("canary: AF_INET refused -- guard is installed")
+      else:
+          sys.exit("canary: AF_INET socket was ALLOWED -- the guard is NOT in "
+                   "force and every from-source claim in this channel is void")
 
-      echo "canary: network unreachable, as required"
+      # 2. AF_UNIX must still work, or we have broken ordinary builds
+      try:
+          socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).close()
+          print("canary: AF_UNIX still works -- guard is appropriately narrow")
+      except OSError as exc:
+          sys.exit(f"canary: AF_UNIX broken by the guard ({exc}) -- too coarse")
+
+      # 3. a real fetch, of the shape upstream build scripts actually use,
+      #    must be refused
+      rc = subprocess.run([sys.executable, "-m", "pip", "download", "--no-deps",
+                           "--dest", "/tmp/canary_dl", "certifi"],
+                          capture_output=True, text=True)
+      if rc.returncode == 0:
+          sys.exit("canary: pip download SUCCEEDED under the guard -- network "
+                   "egress is not blocked")
+      print("canary: pip download refused as required")
+      print("CANARY_RESULT=GUARANTEE_IN_FORCE")
+      PY
+
       mkdir -p "$PREFIX/share/canary"
-      echo "network denied" > "$PREFIX/share/canary/result"
+      echo "guarantee in force" > "$PREFIX/share/canary/result"
 
 requirements:
-  build:
-    - curl
   host:
     - python
     - pip
 
 about:
   license: MIT
-  summary: Negative control — asserts the build sandbox denies network access
+  summary: Positive control — proves the build cannot reach the network
