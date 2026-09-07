@@ -115,6 +115,12 @@ jobs:
           CUW_SHARD_INDEX: ${{ matrix.cell.shard_index }}
           CUW_SHARD_COUNT: ${{ matrix.cell.shard_count }}
           CUW_SRC_TARBALL: ${{ github.workspace }}/staging/${{ matrix.cell.package }}-source.tar.gz
+          # conda-torch's libtorch hard-depends on the __cuda virtual
+          # package, and a GitHub runner has no GPU, so the solve fails with
+          # "__cuda *, for which no candidates were found". Declaring the
+          # driver we are building FOR is the standard override; it affects
+          # dependency resolution only, never the compile.
+          CONDA_OVERRIDE_CUDA: ${{ matrix.cell.cuda }}
           CUW_TORCH_BUILD: ${{ matrix.cell.torch_build }}
           CUW_ARCH_LIST: ${{ matrix.cell.arch_list }}
           CUW_BUILD_NUMBER: ${{ inputs.build_number }}
@@ -188,6 +194,12 @@ jobs:
           CUW_MODE: ${{ matrix.cell.shard_count != '0' && 'link' || 'full' }}
           CUW_SHARD_COUNT: "0"
           CUW_SRC_TARBALL: ${{ github.workspace }}/staging/${{ matrix.cell.package }}-source.tar.gz
+          # conda-torch's libtorch hard-depends on the __cuda virtual
+          # package, and a GitHub runner has no GPU, so the solve fails with
+          # "__cuda *, for which no candidates were found". Declaring the
+          # driver we are building FOR is the standard override; it affects
+          # dependency resolution only, never the compile.
+          CONDA_OVERRIDE_CUDA: ${{ matrix.cell.cuda }}
           CUW_TORCH_BUILD: ${{ matrix.cell.torch_build }}
           CUW_ARCH_LIST: ${{ matrix.cell.arch_list }}
           CUW_BUILD_NUMBER: ${{ inputs.build_number }}
