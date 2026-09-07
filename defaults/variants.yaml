@@ -16,3 +16,14 @@ c_stdlib_version:
 
 cuda_compiler:
   - cuda
+
+# nvcc refuses a host compiler newer than its supported ceiling, and
+# conda-forge's default is far ahead of it: an unpinned build resolved gcc
+# 16.2.0 and torch's cpp_extension aborted with "greater than the maximum
+# required version by CUDA 12.9 ... (>=6.0.0, <14.0)". 13 is inside every
+# CUDA 12.x/13.x window we target. This is a compile-correctness pin, not a
+# preference — raise it only against a specific CUDA line's documented range.
+c_compiler_version:
+  - "13"
+cxx_compiler_version:
+  - "13"

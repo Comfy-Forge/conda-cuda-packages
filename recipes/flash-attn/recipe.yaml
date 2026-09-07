@@ -163,6 +163,14 @@ build:
 
           case "$CUW_MODE" in
             shard)
+              # Report a real compile failure as itself. Checking the cache first meant
+              # a genuine build error (gcc too new for nvcc, say) surfaced as "the
+              # wrapper never occupied the nvcc seat", which sent debugging in exactly
+              # the wrong direction.
+              if [ "$BUILD_RC" -ne 0 ]; then
+                echo "::error::shard build failed (exit $BUILD_RC) -- see the compiler output above" >&2
+                exit "$BUILD_RC"
+              fi
               # A shard that compiled nothing is not automatically wrong (its slice can
               # be empty), but a shard whose wrapper never ran at all is a real defect:
               # it would ship an empty cache and the link job would recompile the world.
