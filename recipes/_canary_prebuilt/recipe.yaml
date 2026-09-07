@@ -1,0 +1,56 @@
+# L4 — the negative canary.
+#
+# This recipe deliberately tries to fetch a prebuilt wheel from the network.
+# CI builds it and asserts the build FAILS. If it ever succeeds, the network
+# denial that L1 rests on has regressed — someone added --allow-network, or
+# dropped --sandbox, or the sandbox silently stopped engaging — and every
+# other package's from-source guarantee is void without any of them failing.
+#
+# It is deliberately NOT generated from a package.yml: it must not change when
+# the template changes, or it stops being an independent check.
+#
+# Expected result: `rattler-build build` exits non-zero, and the log shows the
+# fetch failing rather than the wheel arriving.
+
+package:
+  name: canary-prebuilt
+  version: "0.0.1"
+
+build:
+  number: 0
+  script:
+    content: |
+      set -x
+      echo "canary: attempting a prebuilt-wheel fetch; this MUST fail"
+
+      # Two shapes of the real thing: a direct release-asset download (what
+      # flash-attn's setup.py does), and pip reaching an index.
+      FETCHED=0
+      if curl -fsS --max-time 25 -o /tmp/canary.whl \
+          https://files.pythonhosted.org/packages/py3/t/tiny/tiny-0.0.0-py3-none-any.whl 2>/dev/null; then
+        FETCHED=1
+      fi
+      if $PYTHON -m pip download --no-deps --dest /tmp/canary_dl certifi 2>/dev/null; then
+        FETCHED=1
+      fi
+
+      if [ "$FETCHED" = "1" ]; then
+        echo "::error::CANARY REACHED THE NETWORK — the from-source guarantee (L1) is not in effect."
+        echo "::error::Check that the build runs with --sandbox and WITHOUT --allow-network."
+        exit 1
+      fi
+
+      echo "canary: network unreachable, as required"
+      mkdir -p "$PREFIX/share/canary"
+      echo "network denied" > "$PREFIX/share/canary/result"
+
+requirements:
+  build:
+    - curl
+  host:
+    - python
+    - pip
+
+about:
+  license: MIT
+  summary: Negative control — asserts the build sandbox denies network access

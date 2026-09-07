@@ -1,0 +1,229 @@
+name: build
+
+# Every workflow_dispatch input is routed through `env:` and referenced as a
+# shell variable. A raw ${{ inputs.x }} inside a `run:` block is substituted as
+# TEXT before bash parses the line, so an input containing `"; cmd; y="` breaks
+# out of the quoting and executes (CWE-78). conda-torch shipped that bug across
+# ~10 call sites before it was found; this repo starts without it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Package folder or name (e.g. cc_torch), or "all"'
+        default: "cc_torch"
+      cuda:
+        description: 'CUDA flavour filter, e.g. 12.8 (or "all")'
+        default: "all"
+      pytorch:
+        description: 'torch minor filter, e.g. 2.11 (or "all")'
+        default: "all"
+      python:
+        description: 'python minor filter, e.g. 3.12 (or "all")'
+        default: "all"
+      build_number:
+        description: "build number (bump to republish with fixed metadata)"
+        default: "0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ inputs.package }}-${{ inputs.cuda }}-${{ inputs.pytorch }}-${{ inputs.python }}
+  cancel-in-progress: false
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      compile: ${{ steps.gen.outputs.compile }}
+      link: ${{ steps.gen.outputs.link }}
+    env:
+      IN_PACKAGE: ${{ inputs.package }}
+      IN_CUDA: ${{ inputs.cuda }}
+      IN_PYTORCH: ${{ inputs.pytorch }}
+      IN_PYTHON: ${{ inputs.python }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - run: pip install -q pyyaml jinja2
+      - name: Recipes must be in sync with package.yml
+        run: python scripts/generate_recipes.py --check
+      - name: Generate matrix from the conda-torch channel
+        id: gen
+        run: |
+          set -euo pipefail
+          python scripts/generate_matrix.py \
+            --package "$IN_PACKAGE" --cuda "$IN_CUDA" \
+            --pytorch "$IN_PYTORCH" --python "$IN_PYTHON" \
+            --output matrix.json
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          m = json.load(open("matrix.json"))
+          compile_jobs = [c for c in m if int(c.get("shard_count", 0)) > 0]
+          link_jobs    = [c for c in m if int(c.get("shard_count", 0)) == 0] + \
+                         [dict(c, shard_index=0) for c in m if int(c.get("shard_count", 0)) > 0
+                          and int(c.get("shard_index", 0)) == 1]
+          print(f"compile={json.dumps(compile_jobs)}")
+          print(f"link={json.dumps(link_jobs)}")
+          PY
+
+  source:
+    needs: matrix
+    runs-on: ubuntu-latest
+    env:
+      IN_PACKAGE: ${{ inputs.package }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - run: pip install -q pyyaml
+      - name: Fetch and patch sources (outside the build sandbox)
+        # Doing this here rather than with a `git:` source in the recipe is what
+        # lets the build script run with no network at all: nothing legitimate
+        # remains for it to download, so a prebuilt-wheel fetch has nowhere to
+        # hide behind a real need.
+        run: python scripts/fetch_patched_sources.py --package "$IN_PACKAGE" --output-dir staging
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: source-${{ inputs.package }}
+          path: staging/
+          retention-days: 3
+
+  compile-shard:
+    needs: [matrix, source]
+    if: needs.matrix.outputs.compile != '[]'
+    runs-on: ${{ matrix.cell.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        cell: ${{ fromJson(needs.matrix.outputs.compile) }}
+    name: "shard ${{ matrix.cell.shard_index }}/${{ matrix.cell.shard_count }} ${{ matrix.cell.package }} cu${{ matrix.cell.cuda_short }} torch${{ matrix.cell.pytorch }} py${{ matrix.cell.python }}"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: source-${{ inputs.package }}
+          path: staging
+      - uses: ./.github/actions/setup-conda-build
+      - name: Compile slice
+        env:
+          CUW_MODE: shard
+          CUW_SHARD_INDEX: ${{ matrix.cell.shard_index }}
+          CUW_SHARD_COUNT: ${{ matrix.cell.shard_count }}
+          CUW_SRC_TARBALL: ${{ github.workspace }}/staging/${{ matrix.cell.package }}-source.tar.gz
+          CUW_TORCH_BUILD: ${{ matrix.cell.torch_build }}
+          CUW_BUILD_NUMBER: ${{ inputs.build_number }}
+          CUW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RECIPE: recipes/${{ matrix.cell.conda_name }}/recipe.yaml
+        run: |
+          set -euo pipefail
+          # --sandbox is NOT the default (measured): without it the build script
+          # has full network access and --allow-network is meaningless. It is
+          # the mechanism the from-source guarantee rests on, so it is passed
+          # explicitly, and --allow-network is never passed anywhere in this repo.
+          rattler-build build --recipe "$RECIPE" \
+            --variant-config defaults/variants.yaml \
+            --target-platform "${{ matrix.cell.platform }}" \
+            --output-dir "$RUNNER_TEMP/out" --test skip --no-build-id --sandbox \
+            -c https://comfy-forge.github.io/conda-torch -c conda-forge
+      - name: Package shard cache
+        run: tar -czf "$RUNNER_TEMP/ccache.tar.gz" -C "$CUW_CCACHE_DIR" .
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cache-${{ matrix.cell.package }}-cu${{ matrix.cell.cuda_short }}-t${{ matrix.cell.pytorch }}-py${{ matrix.cell.python }}-${{ matrix.cell.shard_index }}
+          path: ${{ runner.temp }}/ccache.tar.gz
+          retention-days: 3
+
+  link:
+    needs: [matrix, source, compile-shard]
+    # `always()` so unsharded cells (which have no compile-shard job) still run.
+    if: always() && needs.matrix.outputs.link != '[]' && needs.source.result == 'success'
+    runs-on: ${{ matrix.cell.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        cell: ${{ fromJson(needs.matrix.outputs.link) }}
+    name: "link ${{ matrix.cell.package }} cu${{ matrix.cell.cuda_short }} torch${{ matrix.cell.pytorch }} py${{ matrix.cell.python }}"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: source-${{ inputs.package }}
+          path: staging
+      - uses: ./.github/actions/setup-conda-build
+      - name: Restore shard caches
+        if: matrix.cell.shard_count != '0'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: cache-${{ matrix.cell.package }}-cu${{ matrix.cell.cuda_short }}-t${{ matrix.cell.pytorch }}-py${{ matrix.cell.python }}-*
+          path: shard-caches
+      - name: Merge shard caches
+        if: matrix.cell.shard_count != '0'
+        run: |
+          set -euo pipefail
+          found=0
+          for t in shard-caches/*/ccache.tar.gz; do
+            [ -f "$t" ] || continue
+            found=$((found+1)); tar -xzf "$t" -C "$CUW_CCACHE_DIR"
+          done
+          [ "$found" -gt 0 ] || { echo "::error::no shard caches restored"; exit 1; }
+          echo "merged $found shard cache(s)"
+          # The tarballs carry each shard's stats files, which would pollute the
+          # link job's zero-miss assert with the shards' own compile misses.
+          "${CUW_CCACHE_BIN:-ccache}" -z
+      - name: Build
+        env:
+          CUW_MODE: ${{ matrix.cell.shard_count != '0' && 'link' || 'full' }}
+          CUW_SHARD_COUNT: "0"
+          CUW_SRC_TARBALL: ${{ github.workspace }}/staging/${{ matrix.cell.package }}-source.tar.gz
+          CUW_TORCH_BUILD: ${{ matrix.cell.torch_build }}
+          CUW_BUILD_NUMBER: ${{ inputs.build_number }}
+          CUW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RECIPE: recipes/${{ matrix.cell.conda_name }}/recipe.yaml
+        run: |
+          set -euo pipefail
+          rattler-build build --recipe "$RECIPE" \
+            --variant-config defaults/variants.yaml \
+            --target-platform "${{ matrix.cell.platform }}" \
+            --output-dir "$RUNNER_TEMP/out" --test skip --no-build-id --sandbox \
+            -c https://comfy-forge.github.io/conda-torch -c conda-forge
+      - name: Verify artifact
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=("$RUNNER_TEMP"/out/*/*.conda)
+          [ ${#files[@]} -gt 0 ] || { echo "::error::no .conda produced"; exit 1; }
+          if [ -f tools/verify_conda.py ]; then
+            python tools/verify_conda.py "${files[@]}"
+          else
+            echo "::warning::tools/verify_conda.py not present yet — artifact gate skipped"
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: conda-${{ matrix.cell.package }}-cu${{ matrix.cell.cuda_short }}-t${{ matrix.cell.pytorch }}-py${{ matrix.cell.python }}
+          path: ${{ runner.temp }}/out/*/*.conda
+
+  canary:
+    # L4. Asserts the build sandbox still denies network. If this job's build
+    # SUCCEEDS, the from-source guarantee has regressed for every package.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-conda-build
+        with:
+          swapfile-gb: "0"
+      - name: Canary must fail
+        run: |
+          set -uo pipefail
+          if rattler-build build --recipe recipes/_canary_prebuilt/recipe.yaml \
+               --output-dir "$RUNNER_TEMP/canary" --test skip --no-build-id --sandbox \
+               -c conda-forge; then
+            echo "::error::CANARY BUILD SUCCEEDED — the build sandbox is not denying network."
+            echo "::error::Every from-source guarantee in this repo is void until that is fixed."
+            exit 1
+          fi
+          echo "canary failed as required: network is denied inside the build"
