@@ -174,6 +174,17 @@ directly and bypasses `PATH`.
   match the cell's arch list; no vendored `libtorch`; `purls` present; `run:`
   non-empty; the torch build-glob present; compile ledger covers every
   module; import test.
+
+  Two of those are worth pinning down, because they are properties of
+  rattler-build rather than of any recipe. `direct_url.json` and `RECORD` are
+  removed by the shared build script after `pip install .`, since a path
+  install records this runner's `$SRC_DIR` and would make `pip freeze` print
+  a `file://` URL. `INSTALLER` is **not** written there and cannot be: measured
+  on rattler-build 0.75.0, a build script that leaves exactly `conda` (5 bytes,
+  checked with `od` at the end of the script) still yields `conda\n` (6 bytes)
+  in the packaged artifact, because rattler-build normalises the file during
+  packaging and there is no recipe knob for it. A byte-exact `== b"conda"`
+  assertion is therefore unsatisfiable; the check has to compare stripped.
 - **`tools/sweep_solve.py`** — one live solve per cell from the published
   channel, asserting resolution from our release URL *and* that the resolved
   `pytorch` build string's flavour equals the extension's.
