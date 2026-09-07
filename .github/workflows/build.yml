@@ -219,6 +219,38 @@ jobs:
             --target-platform "${{ matrix.cell.platform }}" \
             --output-dir "$RUNNER_TEMP/out" --test skip --no-build-id \
             -c https://comfy-forge.github.io/conda-torch -c conda-forge
+      - name: Provenance report
+        # Printed unconditionally, before verification, because this is the
+        # evidence that the artifact was built from source. If verification
+        # later fails the .conda is not uploaded -- but the provenance still
+        # has to be readable in the log, or diagnosing a failure means
+        # re-running the whole build to see what it produced.
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=("$RUNNER_TEMP"/out/*/*.conda)
+          [ ${#files[@]} -gt 0 ] || { echo "::error::no .conda produced"; exit 1; }
+          python - "${files[@]}" <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import io, json, subprocess, sys, tarfile, zipfile
+          for path in sys.argv[1:]:
+              z = zipfile.ZipFile(path)
+              name = [n for n in z.namelist() if n.startswith("info-")][0]
+              # zstd CLI rather than a python module: same choice
+              # tools/verify_conda.py makes, so this step adds no new dependency.
+              raw = subprocess.run(["zstd", "-d", "--stdout"], input=z.read(name),
+                                   stdout=subprocess.PIPE, check=True).stdout
+              t = tarfile.open(fileobj=io.BytesIO(raw))
+              about = json.load(t.extractfile("info/about.json"))
+              print(f"## {path.rsplit('/', 1)[-1]}")
+              print("```json")
+              print(json.dumps(about.get("extra", {}), indent=2, sort_keys=True))
+              print("```")
+          PY
+          echo "## compile ledger"
+          echo '```'
+          cat "$CUW_LEDGER" 2>/dev/null || echo "(no ledger at $CUW_LEDGER)"
+          echo '```'
+
       - name: Verify artifact
         run: |
           set -euo pipefail
