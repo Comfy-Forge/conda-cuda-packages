@@ -1,6 +1,7 @@
 output/
 work/
+site/
+matrix.json
 __pycache__/
 *.pyc
-site/
 .pixi/
